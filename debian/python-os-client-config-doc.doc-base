@@ -1,0 +1,9 @@
+Document: python-os-client-config-doc
+Title: os-client-config Documentation
+Author: N/A
+Abstract: Sphinx documentation for os-client-config
+Section: Programming/Python
+
+Format: HTML
+Index: /usr/share/doc/python-os-client-config-doc/html/index.html
+Files: /usr/share/doc/python-os-client-config-doc/html/*

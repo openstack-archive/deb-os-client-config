@@ -1,0 +1,5 @@
+python-os-client-config (0.3.0-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #770846)
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 25 Nov 2014 00:05:58 +0800
