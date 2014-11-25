@@ -1,6 +1,7 @@
 python-os-client-config (0.3.0-2) experimental; urgency=medium
 
   * Do not use python 2.6.
+  * Added HP as copyright holder.
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 25 Nov 2014 21:36:37 +0800
 
