@@ -1,3 +1,9 @@
+python-os-client-config (0.3.0-2) experimental; urgency=medium
+
+  * Do not use python 2.6.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 25 Nov 2014 21:36:37 +0800
+
 python-os-client-config (0.3.0-1) experimental; urgency=medium
 
   * Initial release. (Closes: #770846)
