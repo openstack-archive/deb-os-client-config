@@ -16,14 +16,14 @@ os-client-config honors all of the normal `OS_*` variables. It does not
 provide backwards compatibility to service-specific variables such as
 `NOVA_USERNAME`.
 
-If you have environment variables and no config files, os-client-config
-will produce a cloud config object named "openstack" containing your
-values from the environment.
+If you have OpenStack environment variables seet and no config files,
+os-client-config will produce a cloud config object named "envvars" containing
+your values from the environment. If you don't like the name "envvars", that's
+ok, you can override it by setting `OS_CLOUD_NAME`.
 
 Service specific settings, like the nova service type, are set with the
 default service type as a prefix. For instance, to set a special service_type
-for trove (because you're using Rackspace) set:
-::
+for trove set::
 
   export OS_DATABASE_SERVICE_TYPE=rax:database
 
@@ -40,7 +40,7 @@ locations:
 The first file found wins.
 
 The keys are all of the keys you'd expect from `OS_*` - except lower case
-and without the OS prefix. So, username is set with `username`.
+and without the OS prefix. So, region name is set with `region_name`.
 
 Service specific settings, like the nova service type, are set with the
 default service type as a prefix. For instance, to set a special service_type
@@ -57,23 +57,27 @@ An example config file is probably helpful:
   clouds:
     mordred:
       cloud: hp
-      username: mordred@inaugust.com
-      password: XXXXXXXXX
-      project_id: mordred@inaugust.com
+      auth:
+        username: mordred@inaugust.com
+        password: XXXXXXXXX
+        project_name: mordred@inaugust.com
       region_name: region-b.geo-1
       dns_service_type: hpext:dns
+      compute_api_version: 1.1
     monty:
-      auth_url: https://region-b.geo-1.identity.hpcloudsvc.com:35357/v2.0
-      username: monty.taylor@hp.com
-      password: XXXXXXXX
-      project_id: monty.taylor@hp.com-default-tenant
+      auth:
+        auth_url: https://region-b.geo-1.identity.hpcloudsvc.com:35357/v2.0
+        username: monty.taylor@hp.com
+        password: XXXXXXXX
+        project_name: monty.taylor@hp.com-default-tenant
       region_name: region-b.geo-1
       dns_service_type: hpext:dns
     infra:
       cloud: rackspace
-      username: openstackci
-      password: XXXXXXXX
-      project_id: 610275
+      auth:
+        username: openstackci
+        password: XXXXXXXX
+        project_id: 610275
       region_name: DFW,ORD,IAD
 
 You may note a few things. First, since auth_url settings are silly
@@ -92,24 +96,48 @@ the setting with the default service type. That might strike you funny when
 setting `service_type` and it does me too - but that's just the world we live
 in.
 
+Auth Settings
+-------------
+
+Keystone has auth plugins - which means it's not possible to know ahead of time
+which auth settings are needed. `os-client-config` sets the default plugin type
+to `password`, which is what things all were before plugins came about. In
+order to facilitate validation of values, all of the parameters that exist
+as a result of a chosen plugin need to go into the auth dict. For password
+auth, this includes `auth_url`, `username` and `password` as well as anything
+related to domains, projects and trusts.
+
 Cache Settings
 --------------
 
 Accessing a cloud is often expensive, so it's quite common to want to do some
 client-side caching of those operations. To facilitate that, os-client-config
-understands a simple set of cache control settings.
+understands passing through cache settings to dogpile.cache, with the following
+behaviors:
+
+* Listing no config settings means you get a null cache.
+* `cache.max_age` and nothing else gets you memory cache.
+* Otherwise, `cache.class` and `cache.arguments` are passed in
+
+`os-client-config` does not actually cache anything itself, but it collects
+and presents the cache information so that your various applications that
+are connecting to OpenStack can share a cache should you desire.
 
 ::
 
   cache:
-    path: ~/.cache/openstack
-    max_age: 300
+    class: dogpile.cache.pylibmc
+    max_age: 3600
+    arguments:
+      url:
+        - 127.0.0.1
   clouds:
     mordred:
       cloud: hp
-      username: mordred@inaugust.com
-      password: XXXXXXXXX
-      project_id: mordred@inaugust.com
+      auth:
+        username: mordred@inaugust.com
+        password: XXXXXXXXX
+        project_name: mordred@inaugust.com
       region_name: region-b.geo-1
       dns_service_type: hpext:dns
 
@@ -143,6 +171,4 @@ Or, get all of the clouds.
       print(cloud.name, cloud.region, cloud.config)
 
 * Free software: Apache license
-* Documentation: http://docs.openstack.org/developer/os-client-config
-* Source: http://git.openstack.org/cgit/openstack/os-client-config
-* Bugs: http://bugs.launchpad.net/os-client-config
+* Source: http://git.openstack.org/cgit/stackforge/os-client-config

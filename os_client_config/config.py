@@ -17,8 +17,13 @@ import os
 
 import yaml
 
+try:
+    import keystoneclient.auth as ksc_auth
+except ImportError:
+    ksc_auth = None
+
 from os_client_config import cloud_config
-from os_client_config import defaults_dict
+from os_client_config import defaults
 from os_client_config import exceptions
 from os_client_config import vendors
 
@@ -32,10 +37,13 @@ CACHE_PATH = os.path.join(os.path.expanduser(
     os.environ.get('XDG_CACHE_PATH', os.path.join('~', '.cache'))),
     'openstack')
 BOOL_KEYS = ('insecure', 'cache')
-REQUIRED_VALUES = ('auth_url', 'username', 'password')
 VENDOR_SEARCH_PATH = [os.getcwd(), CONFIG_HOME, '/etc/openstack']
 VENDOR_FILES = [
     os.path.join(d, 'clouds-public.yaml') for d in VENDOR_SEARCH_PATH]
+
+
+def set_default(key, value):
+    defaults._defaults[key] = value
 
 
 def get_boolean(value):
@@ -44,31 +52,37 @@ def get_boolean(value):
     return False
 
 
+def _get_os_environ():
+    ret = dict(defaults._defaults)
+    environkeys = [k for k in os.environ.keys() if k.startswith('OS_')]
+    if not environkeys:
+        return None
+    for k in environkeys:
+        newkey = k[3:].lower()
+        ret[newkey] = os.environ[k]
+    return ret
+
+
+def _auth_update(old_dict, new_dict):
+    """Like dict.update, except handling the nested dict called auth."""
+    for (k, v) in new_dict.items():
+        if k == 'auth':
+            if k in old_dict:
+                old_dict[k].update(v)
+            else:
+                old_dict[k] = v.copy()
+        else:
+            old_dict[k] = v
+    return old_dict
+
+
 class OpenStackConfig(object):
 
     def __init__(self, config_files=None, vendor_files=None):
         self._config_files = config_files or CONFIG_FILES
         self._vendor_files = vendor_files or VENDOR_FILES
 
-        defaults = defaults_dict.DefaultsDict()
-        defaults.add('username')
-        defaults.add('user_domain_name')
-        defaults.add('password')
-        defaults.add(
-            'project_name', defaults.get('username', None),
-            also='tenant_name')
-        defaults.add('project_id', also='tenant_id')
-        defaults.add('project_domain_name')
-        defaults.add('auth_url')
-        defaults.add('region_name')
-        defaults.add('cache')
-        defaults.add('auth_token')
-        defaults.add('insecure')
-        defaults.add('endpoint_type')
-        defaults.add('cacert')
-        defaults.add('auth_type')
-
-        self.defaults = defaults
+        self.defaults = dict(defaults._defaults)
 
         # use a config file if it exists where expected
         self.cloud_config = self._load_config_file()
@@ -76,29 +90,65 @@ class OpenStackConfig(object):
             self.cloud_config = dict(
                 clouds=dict(openstack=dict(self.defaults)))
 
-        self._cache_max_age = 300
+        self.envvar_key = os.environ.pop('OS_CLOUD_NAME', None)
+        if self.envvar_key:
+            if self.envvar_key in self.cloud_config['clouds']:
+                raise exceptions.OpenStackConfigException(
+                    'clouds.yaml defines a cloud named "{0}", but'
+                    ' OS_CLOUD_NAME is also set to "{0}". Please rename'
+                    ' either your environment based cloud, or one of your'
+                    ' file-based clouds.'.format(self.envvar_key))
+        else:
+            self.envvar_key = 'envvars'
+
+        envvars = _get_os_environ()
+        if envvars:
+            if self.envvar_key in self.cloud_config['clouds']:
+                raise exceptions.OpenStackConfigException(
+                    'clouds.yaml defines a cloud named {0}, and OS_*'
+                    ' env vars are set')
+            self.cloud_config['clouds'][self.envvar_key] = envvars
+
+        self._cache_max_age = 0
         self._cache_path = CACHE_PATH
+        self._cache_class = 'dogpile.cache.null'
+        self._cache_arguments = {}
         if 'cache' in self.cloud_config:
             self._cache_max_age = self.cloud_config['cache'].get(
                 'max_age', self._cache_max_age)
+            if self._cache_max_age:
+                self._cache_class = 'dogpile.cache.memory'
             self._cache_path = os.path.expanduser(
                 self.cloud_config['cache'].get('path', self._cache_path))
+            self._cache_class = self.cloud_config['cache'].get(
+                'class', self._cache_class)
+            self._cache_arguments = self.cloud_config['cache'].get(
+                'arguments', self._cache_arguments)
 
     def _load_config_file(self):
         for path in self._config_files:
             if os.path.exists(path):
-                return yaml.load(open(path, 'r'))
+                with open(path, 'r') as f:
+                    return yaml.safe_load(f)
+        return dict(clouds=dict())
 
     def _load_vendor_file(self):
         for path in self._vendor_files:
             if os.path.exists(path):
-                return yaml.load(open(path, 'r'))
+                with open(path, 'r') as f:
+                    return yaml.safe_load(f)
 
     def get_cache_max_age(self):
         return self._cache_max_age
 
     def get_cache_path(self):
         return self._cache_path
+
+    def get_cache_class(self):
+        return self._cache_class
+
+    def get_cache_arguments(self):
+        return self._cache_arguments
 
     def _get_regions(self, cloud):
         try:
@@ -107,7 +157,7 @@ class OpenStackConfig(object):
             # No region configured
             return ''
 
-    def _get_region(self, cloud):
+    def _get_region(self, cloud=None):
         return self._get_regions(cloud).split(',')[0]
 
     def _get_cloud_sections(self):
@@ -115,12 +165,16 @@ class OpenStackConfig(object):
 
     def _get_base_cloud_config(self, name):
         cloud = dict()
-        if name in self.cloud_config['clouds']:
-            our_cloud = self.cloud_config['clouds'][name]
-        else:
-            our_cloud = dict()
 
-        # Get the defaults (including env vars) first
+        # Only validate cloud name if one was given
+        if name and name not in self.cloud_config['clouds']:
+            raise exceptions.OpenStackConfigException(
+                "Named cloud {name} requested that was not found.".format(
+                    name=name))
+
+        our_cloud = self.cloud_config['clouds'].get(name, dict())
+
+        # Get the defaults
         cloud.update(self.defaults)
 
         # yes, I know the next line looks silly
@@ -128,28 +182,59 @@ class OpenStackConfig(object):
             cloud_name = our_cloud['cloud']
             vendor_file = self._load_vendor_file()
             if vendor_file and cloud_name in vendor_file['public-clouds']:
-                cloud.update(vendor_file['public-clouds'][cloud_name])
+                _auth_update(cloud, vendor_file['public-clouds'][cloud_name])
             else:
                 try:
-                    cloud.update(vendors.CLOUD_DEFAULTS[cloud_name])
+                    _auth_update(cloud, vendors.CLOUD_DEFAULTS[cloud_name])
                 except KeyError:
                     # Can't find the requested vendor config, go about business
                     pass
 
-        cloud.update(our_cloud)
+        if 'auth' not in cloud:
+            cloud['auth'] = dict()
+
+        _auth_update(cloud, our_cloud)
         if 'cloud' in cloud:
             del cloud['cloud']
 
-        return self._fix_project_madness(cloud)
+        return self._fix_backwards_madness(cloud)
 
-    def _fix_project_madness(self, cloud):
-        project_name = None
-        # Do the list backwards so that project_name is the ultimate winner
-        for key in ('tenant_id', 'project_id', 'tenant_name', 'project_name'):
-            if key in cloud:
-                project_name = cloud[key]
-                del cloud[key]
-        cloud['project_name'] = project_name
+    def _fix_backwards_madness(self, cloud):
+        cloud = self._fix_backwards_project(cloud)
+        cloud = self._fix_backwards_auth_plugin(cloud)
+        return cloud
+
+    def _fix_backwards_project(self, cloud):
+        # Do the lists backwards so that project_name is the ultimate winner
+        mappings = {
+            'project_name': ('tenant_id', 'project_id',
+                             'tenant_name', 'project_name'),
+        }
+        for target_key, possible_values in mappings.items():
+            target = None
+            for key in possible_values:
+                if key in cloud:
+                    target = cloud[key]
+                    del cloud[key]
+                if key in cloud['auth']:
+                    target = cloud['auth'][key]
+                    del cloud['auth'][key]
+            if target:
+                cloud['auth'][target_key] = target
+        return cloud
+
+    def _fix_backwards_auth_plugin(self, cloud):
+        # Do the lists backwards so that auth_type is the ultimate winner
+        mappings = {
+            'auth_type': ('auth_plugin', 'auth_type'),
+        }
+        for target_key, possible_values in mappings.items():
+            target = None
+            for key in possible_values:
+                if key in cloud:
+                    target = cloud[key]
+                    del cloud[key]
+            cloud[target_key] = target
         return cloud
 
     def get_all_clouds(self):
@@ -181,7 +266,7 @@ class OpenStackConfig(object):
 
         os_args = dict()
         new_args = dict()
-        for (key, val) in args.iteritems():
+        for (key, val) in iter(args.items()):
             key = key.replace('-', '_')
             if key.startswith('os'):
                 os_args[key[3:]] = val
@@ -189,6 +274,59 @@ class OpenStackConfig(object):
                 new_args[key] = val
         new_args.update(os_args)
         return new_args
+
+    def _find_winning_auth_value(self, opt, config):
+        opt_name = opt.name.replace('-', '_')
+        if opt_name in config:
+            return config[opt_name]
+        else:
+            for d_opt in opt.deprecated_opts:
+                d_opt_name = d_opt.name.replace('-', '_')
+                if d_opt_name in config:
+                    return config[d_opt_name]
+
+    def _validate_auth(self, config):
+        # May throw a keystoneclient.exceptions.NoMatchingPlugin
+        plugin_options = ksc_auth.get_plugin_class(
+            config['auth_type']).get_options()
+
+        for p_opt in plugin_options:
+            # if it's in config.auth, win, kill it from config dict
+            # if it's in config and not in config.auth, move it
+            # deprecated loses to current
+            # provided beats default, deprecated or not
+            winning_value = self._find_winning_auth_value(
+                p_opt, config['auth'])
+            if not winning_value:
+                winning_value = self._find_winning_auth_value(p_opt, config)
+
+            # if the plugin tells us that this value is required
+            # then error if it's doesn't exist now
+            if not winning_value and p_opt.required:
+                raise exceptions.OpenStackConfigException(
+                    'Unable to find auth information for cloud'
+                    ' {cloud} in config files {files}'
+                    ' or environment variables. Missing value {auth_key}'
+                    ' required for auth plugin {plugin}'.format(
+                        cloud=cloud, files=','.join(self._config_files),
+                        auth_key=p_opt.name, plugin=config.get('auth_type')))
+
+            # Clean up after ourselves
+            for opt in [p_opt.name] + [o.name for o in p_opt.deprecated_opts]:
+                opt = opt.replace('-', '_')
+                config.pop(opt, None)
+                config['auth'].pop(opt, None)
+
+            if winning_value:
+                # Prefer the plugin configuration dest value if the value's key
+                # is marked as depreciated.
+                if p_opt.dest is None:
+                    config['auth'][p_opt.name.replace('-', '_')] = (
+                        winning_value)
+                else:
+                    config['auth'][p_opt.dest] = winning_value
+
+        return config
 
     def get_one_cloud(self, cloud=None, validate=True,
                       argparse=None, **kwargs):
@@ -206,20 +344,18 @@ class OpenStackConfig(object):
         :param kwargs: Additional configuration options
         """
 
+        if cloud is None and self.envvar_key in self._get_cloud_sections():
+            cloud = self.envvar_key
+
         args = self._fix_args(kwargs, argparse=argparse)
 
-        if cloud:
-            name = cloud
-        else:
-            name = 'openstack'
+        if 'region_name' not in args or args['region_name'] is None:
+            args['region_name'] = self._get_region(cloud)
 
-        if 'region_name' not in args:
-            args['region_name'] = self._get_region(name)
-
-        config = self._get_base_cloud_config(name)
+        config = self._get_base_cloud_config(cloud)
 
         # Can't just do update, because None values take over
-        for (key, val) in args.iteritems():
+        for (key, val) in iter(args.items()):
             if val is not None:
                 config[key] = val
 
@@ -228,20 +364,12 @@ class OpenStackConfig(object):
                 if type(config[key]) is not bool:
                     config[key] = get_boolean(config[key])
 
-        if validate:
-            for key in REQUIRED_VALUES:
-                if key not in config or not config[key]:
-                    raise exceptions.OpenStackConfigException(
-                        'Unable to find full auth information for cloud'
-                        ' {name} in config files {files}'
-                        ' or environment variables.'.format(
-                            name=name, files=','.join(self._config_files)))
-            if 'project_name' not in config and 'project_id' not in config:
-                raise exceptions.OpenStackConfigException(
-                    'Neither project_name or project_id information found'
-                    ' for cloud {name} in config files {files}'
-                    ' or environment variables.'.format(
-                        name=name, files=','.join(self._config_files)))
+        if 'auth_type' in config:
+            if config['auth_type'] in ('', 'None', None):
+                validate = False
+
+        if validate and ksc_auth:
+            config = self._validate_auth(config)
 
         # If any of the defaults reference other values, we need to expand
         for (key, value) in config.items():
@@ -249,7 +377,7 @@ class OpenStackConfig(object):
                 config[key] = value.format(**config)
 
         return cloud_config.CloudConfig(
-            name=name, region=config['region_name'], config=config)
+            name=cloud, region=config['region_name'], config=config)
 
 if __name__ == '__main__':
     config = OpenStackConfig().get_all_clouds()

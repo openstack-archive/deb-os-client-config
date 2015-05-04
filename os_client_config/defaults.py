@@ -12,16 +12,12 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import os
-
-
-class DefaultsDict(dict):
-
-    def add(self, key, default_value=None, also=None, prefix=None):
-        if prefix:
-            key = '%s_%s' % (prefix.replace('-', '_'), key)
-        if also:
-            value = os.environ.get(also, default_value)
-        value = os.environ.get('OS_%s' % key.upper(), default_value)
-        if value is not None:
-            self.__setitem__(key, value)
+_defaults = dict(
+    auth_type='password',
+    compute_api_version='2',
+    identity_api_version='2',
+    image_api_version='1',
+    network_api_version='2',
+    object_api_version='1',
+    volume_api_version='1',
+)

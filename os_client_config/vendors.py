@@ -1,3 +1,4 @@
+# flake8: noqa
 # Copyright (c) 2014 Hewlett-Packard Development Company, L.P.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -14,13 +15,46 @@
 
 CLOUD_DEFAULTS = dict(
     hp=dict(
-        auth_url='https://region-b.geo-1.identity.hpcloudsvc.com:35357/v2.0',
+        auth=dict(
+            auth_url='https://region-b.geo-1.identity.hpcloudsvc.com:35357/v2.0',
+        ),
         region_name='region-b.geo-1',
         dns_service_type='hpext:dns',
+        image_api_version='1',
+        image_format='qcow2',
     ),
     rackspace=dict(
-        auth_url='https://identity.api.rackspacecloud.com/v2.0/',
+        auth=dict(
+            auth_url='https://identity.api.rackspacecloud.com/v2.0/',
+        ),
         database_service_type='rax:database',
+        compute_service_name='cloudServersOpenStack',
         image_api_version='2',
-    )
+        image_api_use_tasks=True,
+        image_format='vhd',
+    ),
+    dreamhost=dict(
+        auth=dict(
+            auth_url='https://keystone.dream.io/v2.0',
+        ),
+        region_name='RegionOne',
+        image_api_version='2',
+        image_format='raw',
+    ),
+    vexxhost=dict(
+        auth=dict(
+            auth_url='http://auth.api.thenebulacloud.com:5000/v2.0/',
+        ),
+        region_name='ca-ymq-1',
+        image_api_version='1',
+        image_format='qcow2',
+    ),
+    runabove=dict(
+        auth=dict(
+            auth_url='https://auth.runabove.io/v2.0',
+        ),
+        image_api_version='1',
+        image_format='qcow2',
+    ),
+
 )
