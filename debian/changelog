@@ -2,6 +2,7 @@ python-os-client-config (0.8.1-1) unstable; urgency=medium
 
   * New upstream release.
   * Uploading to unstable.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 04 May 2015 15:19:45 +0200
 
