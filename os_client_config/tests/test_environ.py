@@ -15,6 +15,7 @@
 
 from os_client_config import cloud_config
 from os_client_config import config
+from os_client_config import exceptions
 from os_client_config.tests import base
 
 import fixtures
@@ -36,12 +37,18 @@ class TestEnviron(base.TestCase):
                                    vendor_files=[self.vendor_yaml])
         self.assertIsInstance(c.get_one_cloud(), cloud_config.CloudConfig)
 
-    def test_envvar_name_override(self):
-        self.useFixture(
-            fixtures.EnvironmentVariable('OS_CLOUD_NAME', 'openstack'))
+    def test_no_fallthrough(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    vendor_files=[self.vendor_yaml])
-        cc = c.get_one_cloud('openstack')
+        self.assertRaises(
+            exceptions.OpenStackConfigException, c.get_one_cloud, 'openstack')
+
+    def test_envvar_name_override(self):
+        self.useFixture(
+            fixtures.EnvironmentVariable('OS_CLOUD_NAME', 'override'))
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+        cc = c.get_one_cloud('override')
         self._assert_cloud_details(cc)
 
     def test_environ_exists(self):
@@ -52,7 +59,7 @@ class TestEnviron(base.TestCase):
         self.assertNotIn('auth_url', cc.config)
         self.assertIn('auth_url', cc.config['auth'])
         self.assertNotIn('auth_url', cc.config)
-        cc = c.get_one_cloud('_test_cloud_')
+        cc = c.get_one_cloud('_test-cloud_')
         self._assert_cloud_details(cc)
         cc = c.get_one_cloud('_test_cloud_no_vendor')
         self._assert_cloud_details(cc)
@@ -65,7 +72,7 @@ class TestEnviron(base.TestCase):
         self.assertIsInstance(c.cloud_config['cache'], dict)
         self.assertIn('max_age', c.cloud_config['cache'])
         self.assertIn('path', c.cloud_config['cache'])
-        cc = c.get_one_cloud('_test_cloud_')
+        cc = c.get_one_cloud('_test-cloud_')
         self._assert_cloud_details(cc)
         cc = c.get_one_cloud('_test_cloud_no_vendor')
         self._assert_cloud_details(cc)

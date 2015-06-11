@@ -39,8 +39,8 @@ VENDOR_CONF = {
 }
 USER_CONF = {
     'clouds': {
-        '_test_cloud_': {
-            'cloud': '_test_cloud_in_our_cloud',
+        '_test-cloud_': {
+            'profile': '_test_cloud_in_our_cloud',
             'auth': {
                 'username': 'testuser',
                 'password': 'testpass',
@@ -48,15 +48,18 @@ USER_CONF = {
             'region_name': 'test-region',
         },
         '_test_cloud_no_vendor': {
-            'cloud': '_test_non_existant_cloud',
+            'profile': '_test_non_existant_cloud',
             'auth': {
                 'username': 'testuser',
                 'password': 'testpass',
                 'project_name': 'testproject',
             },
-            'region_name': 'test-region',
+            'region-name': 'test-region',
         },
     },
+    'cache': {'max_age': 1},
+}
+NO_CONF = {
     'cache': {'max_age': 1},
 }
 
@@ -80,6 +83,7 @@ class TestCase(base.BaseTestCase):
         conf['cache']['path'] = tdir.path
         self.cloud_yaml = _write_yaml(conf)
         self.vendor_yaml = _write_yaml(VENDOR_CONF)
+        self.no_yaml = _write_yaml(NO_CONF)
 
         # Isolate the test runs from the environment
         # Do this as two loops because you can't modify the dict in a loop

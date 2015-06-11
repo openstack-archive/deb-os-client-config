@@ -9,6 +9,10 @@ put in a config file. It will read environment variables and config files,
 and it also contains some vendor specific default values so that you don't
 have to know extra info to use OpenStack
 
+* If you have a config file, you will get the clouds listed in it
+* If you have environment variables, you will get a cloud named 'envvars'
+* If you have neither, you will get a cloud named 'defaults' with base defaults
+
 Environment Variables
 ---------------------
 
@@ -16,10 +20,10 @@ os-client-config honors all of the normal `OS_*` variables. It does not
 provide backwards compatibility to service-specific variables such as
 `NOVA_USERNAME`.
 
-If you have OpenStack environment variables seet and no config files,
-os-client-config will produce a cloud config object named "envvars" containing
-your values from the environment. If you don't like the name "envvars", that's
-ok, you can override it by setting `OS_CLOUD_NAME`.
+If you have OpenStack environment variables set, os-client-config will produce
+a cloud config object named "envvars" containing your values from the
+environment. If you don't like the name "envvars", that's ok, you can override
+it by setting `OS_CLOUD_NAME`.
 
 Service specific settings, like the nova service type, are set with the
 default service type as a prefix. For instance, to set a special service_type
@@ -46,6 +50,28 @@ Service specific settings, like the nova service type, are set with the
 default service type as a prefix. For instance, to set a special service_type
 for trove (because you're using Rackspace) set:
 
+Site Specific File Locations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In addition to `~/.config/openstack` and `/etc/openstack` - some platforms
+have other locations they like to put things. `os-client-config` will also
+look in an OS specific config dir
+
+* `USER_CONFIG_DIR`
+* `SITE_CONFIG_DIR`
+
+`USER_CONFIG_DIR` is different on Linux, OSX and Windows.
+
+* Linux: `~/.config/openstack`
+* OSX: `~/Library/Application Support/openstack`
+* Windows: `C:\\Users\\USERNAME\\AppData\\Local\\OpenStack\\openstack`
+
+`SITE_CONFIG_DIR` is different on Linux, OSX and Windows.
+
+* Linux: `/etc/openstack`
+* OSX: `/Library/Application Support/openstack`
+* Windows: `C:\\ProgramData\\OpenStack\\openstack`
+
 ::
 
   database_service_type: 'rax:database'
@@ -56,7 +82,7 @@ An example config file is probably helpful:
 
   clouds:
     mordred:
-      cloud: hp
+      profile: hp
       auth:
         username: mordred@inaugust.com
         password: XXXXXXXXX
@@ -73,7 +99,7 @@ An example config file is probably helpful:
       region_name: region-b.geo-1
       dns_service_type: hpext:dns
     infra:
-      cloud: rackspace
+      profile: rackspace
       auth:
         username: openstackci
         password: XXXXXXXX
@@ -81,11 +107,11 @@ An example config file is probably helpful:
       region_name: DFW,ORD,IAD
 
 You may note a few things. First, since auth_url settings are silly
-and embarrasingly ugly, known cloud vendors are included and may be referrenced
-by name. One of the benefits of that is that auth_url isn't the only thing
-the vendor defaults contain. For instance, since Rackspace lists
-`rax:database` as the service type for trove, os-client-config knows that
-so that you don't have to.
+and embarrasingly ugly, known cloud vendor profile information is included and
+may be referrenced by name. One of the benefits of that is that auth_url
+isn't the only thing the vendor defaults contain. For instance, since
+Rackspace lists `rax:database` as the service type for trove, os-client-config
+knows that so that you don't have to.
 
 Also, region_name can be a list of regions. When you call get_all_clouds,
 you'll get a cloud config object for each cloud/region combo.
@@ -133,7 +159,7 @@ are connecting to OpenStack can share a cache should you desire.
         - 127.0.0.1
   clouds:
     mordred:
-      cloud: hp
+      profile: hp
       auth:
         username: mordred@inaugust.com
         password: XXXXXXXXX
@@ -169,6 +195,3 @@ Or, get all of the clouds.
   cloud_config = os_client_config.OpenStackConfig().get_all_clouds()
   for cloud in cloud_config:
       print(cloud.name, cloud.region, cloud.config)
-
-* Free software: Apache license
-* Source: http://git.openstack.org/cgit/stackforge/os-client-config

@@ -32,6 +32,12 @@ CLOUD_DEFAULTS = dict(
         image_api_version='2',
         image_api_use_tasks=True,
         image_format='vhd',
+        floating_ip_source=None,
+        secgroup_source=None,
+        disable_vendor_agent=dict(
+            vm_mode='hvm',
+            xenapi_use_agent=False,
+        )
     ),
     dreamhost=dict(
         auth=dict(
@@ -46,15 +52,36 @@ CLOUD_DEFAULTS = dict(
             auth_url='http://auth.api.thenebulacloud.com:5000/v2.0/',
         ),
         region_name='ca-ymq-1',
-        image_api_version='1',
+        image_api_version='2',
         image_format='qcow2',
+        floating_ip_source=None,
     ),
     runabove=dict(
         auth=dict(
             auth_url='https://auth.runabove.io/v2.0',
         ),
+        image_api_version='2',
+        image_format='qcow2',
+        floating_ip_source=None,
+    ),
+    unitedstack=dict(
+        auth=dict(
+            auth_url='https://identity.api.ustack.com/v3',
+        ),
+        identity_api_version='3',
+        image_api_version='2',
+        image_format='raw',
+        floating_ip_source=None,
+    ),
+    auro=dict(
+        auth=dict(
+            auth_url='https://api.auro.io:5000/v2.0',
+        ),
+        region_name='RegionOne',
+        identity_api_version='2',
         image_api_version='1',
         image_format='qcow2',
+        secgroup_source='nova',
+        floating_ip_source='nova',
     ),
-
 )

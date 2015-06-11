@@ -15,6 +15,7 @@
 
 import os
 
+import appdirs
 import yaml
 
 try:
@@ -27,21 +28,40 @@ from os_client_config import defaults
 from os_client_config import exceptions
 from os_client_config import vendors
 
-CONFIG_HOME = os.path.join(os.path.expanduser(
-    os.environ.get('XDG_CONFIG_HOME', os.path.join('~', '.config'))),
-    'openstack')
-CONFIG_SEARCH_PATH = [os.getcwd(), CONFIG_HOME, '/etc/openstack']
+APPDIRS = appdirs.AppDirs('openstack', 'OpenStack', multipath='/etc')
+CONFIG_HOME = APPDIRS.user_config_dir
+CACHE_PATH = APPDIRS.user_cache_dir
+
+UNIX_CONFIG_HOME = os.path.join(
+    os.path.expanduser(os.path.join('~', '.config')), 'openstack')
+UNIX_SITE_CONFIG_HOME = '/etc/openstack'
+
+SITE_CONFIG_HOME = APPDIRS.site_config_dir
+
+CONFIG_SEARCH_PATH = [
+    os.getcwd(),
+    CONFIG_HOME, UNIX_CONFIG_HOME,
+    SITE_CONFIG_HOME, UNIX_SITE_CONFIG_HOME
+]
+YAML_SUFFIXES = ('.yaml', '.yml')
 CONFIG_FILES = [
-    os.path.join(d, 'clouds.yaml') for d in CONFIG_SEARCH_PATH]
-CACHE_PATH = os.path.join(os.path.expanduser(
-    os.environ.get('XDG_CACHE_PATH', os.path.join('~', '.cache'))),
-    'openstack')
-BOOL_KEYS = ('insecure', 'cache')
-VENDOR_SEARCH_PATH = [os.getcwd(), CONFIG_HOME, '/etc/openstack']
+    os.path.join(d, 'clouds' + s)
+    for d in CONFIG_SEARCH_PATH
+    for s in YAML_SUFFIXES
+]
 VENDOR_FILES = [
-    os.path.join(d, 'clouds-public.yaml') for d in VENDOR_SEARCH_PATH]
+    os.path.join(d, 'clouds-public' + s)
+    for d in CONFIG_SEARCH_PATH
+    for s in YAML_SUFFIXES
+]
+
+BOOL_KEYS = ('insecure', 'cache')
 
 
+# NOTE(dtroyer): This turns out to be not the best idea so let's move
+#                overriding defaults to a kwarg to OpenStackConfig.__init__()
+#                Remove this sometime in June 2015 once OSC is comfortably
+#                changed-over and global-defaults is updated.
 def set_default(key, value):
     defaults._defaults[key] = value
 
@@ -53,7 +73,7 @@ def get_boolean(value):
 
 
 def _get_os_environ():
-    ret = dict(defaults._defaults)
+    ret = defaults.get_defaults()
     environkeys = [k for k in os.environ.keys() if k.startswith('OS_')]
     if not environkeys:
         return None
@@ -78,36 +98,42 @@ def _auth_update(old_dict, new_dict):
 
 class OpenStackConfig(object):
 
-    def __init__(self, config_files=None, vendor_files=None):
+    def __init__(self, config_files=None, vendor_files=None,
+                 override_defaults=None):
         self._config_files = config_files or CONFIG_FILES
         self._vendor_files = vendor_files or VENDOR_FILES
 
-        self.defaults = dict(defaults._defaults)
+        self.defaults = defaults.get_defaults()
+        if override_defaults:
+            self.defaults.update(override_defaults)
 
-        # use a config file if it exists where expected
-        self.cloud_config = self._load_config_file()
+        # First, use a config file if it exists where expected
+        self.config_filename, self.cloud_config = self._load_config_file()
+
         if not self.cloud_config:
-            self.cloud_config = dict(
-                clouds=dict(openstack=dict(self.defaults)))
+            self.cloud_config = {'clouds': {}}
+        if 'clouds' not in self.cloud_config:
+            self.cloud_config['clouds'] = {}
 
-        self.envvar_key = os.environ.pop('OS_CLOUD_NAME', None)
-        if self.envvar_key:
-            if self.envvar_key in self.cloud_config['clouds']:
-                raise exceptions.OpenStackConfigException(
-                    'clouds.yaml defines a cloud named "{0}", but'
-                    ' OS_CLOUD_NAME is also set to "{0}". Please rename'
-                    ' either your environment based cloud, or one of your'
-                    ' file-based clouds.'.format(self.envvar_key))
-        else:
-            self.envvar_key = 'envvars'
+        # Next, process environment variables and add them to the mix
+        self.envvar_key = os.environ.pop('OS_CLOUD_NAME', 'envvars')
+        if self.envvar_key in self.cloud_config['clouds']:
+            raise exceptions.OpenStackConfigException(
+                'clouds.yaml defines a cloud named "{0}", but'
+                ' OS_CLOUD_NAME is also set to "{0}". Please rename'
+                ' either your environment based cloud, or one of your'
+                ' file-based clouds.'.format(self.envvar_key))
 
         envvars = _get_os_environ()
         if envvars:
-            if self.envvar_key in self.cloud_config['clouds']:
-                raise exceptions.OpenStackConfigException(
-                    'clouds.yaml defines a cloud named {0}, and OS_*'
-                    ' env vars are set')
             self.cloud_config['clouds'][self.envvar_key] = envvars
+
+        # Finally, fall through and make a cloud that starts with defaults
+        # because we need somewhere to put arguments, and there are neither
+        # config files or env vars
+        if not self.cloud_config['clouds']:
+            self.cloud_config = dict(
+                clouds=dict(defaults=dict(self.defaults)))
 
         self._cache_max_age = 0
         self._cache_path = CACHE_PATH
@@ -126,17 +152,27 @@ class OpenStackConfig(object):
                 'arguments', self._cache_arguments)
 
     def _load_config_file(self):
-        for path in self._config_files:
-            if os.path.exists(path):
-                with open(path, 'r') as f:
-                    return yaml.safe_load(f)
-        return dict(clouds=dict())
+        return self._load_yaml_file(self._config_files)
 
     def _load_vendor_file(self):
-        for path in self._vendor_files:
+        return self._load_yaml_file(self._vendor_files)
+
+    def _load_yaml_file(self, filelist):
+        for path in filelist:
             if os.path.exists(path):
                 with open(path, 'r') as f:
-                    return yaml.safe_load(f)
+                    return path, yaml.safe_load(f)
+        return (None, None)
+
+    def _normalize_keys(self, config):
+        new_config = {}
+        for key, value in config.items():
+            key = key.replace('-', '_')
+            if isinstance(value, dict):
+                new_config[key] = self._normalize_keys(value)
+            else:
+                new_config[key] = value
+        return new_config
 
     def get_cache_max_age(self):
         return self._cache_max_age
@@ -160,7 +196,7 @@ class OpenStackConfig(object):
     def _get_region(self, cloud=None):
         return self._get_regions(cloud).split(',')[0]
 
-    def _get_cloud_sections(self):
+    def get_cloud_names(self):
         return self.cloud_config['clouds'].keys()
 
     def _get_base_cloud_config(self, name):
@@ -177,15 +213,16 @@ class OpenStackConfig(object):
         # Get the defaults
         cloud.update(self.defaults)
 
-        # yes, I know the next line looks silly
-        if 'cloud' in our_cloud:
-            cloud_name = our_cloud['cloud']
-            vendor_file = self._load_vendor_file()
-            if vendor_file and cloud_name in vendor_file['public-clouds']:
-                _auth_update(cloud, vendor_file['public-clouds'][cloud_name])
+        # Expand a profile if it exists. 'cloud' is an old confusing name
+        # for this.
+        profile_name = our_cloud.get('profile', our_cloud.get('cloud', None))
+        if profile_name:
+            vendor_filename, vendor_file = self._load_vendor_file()
+            if vendor_file and profile_name in vendor_file['public-clouds']:
+                _auth_update(cloud, vendor_file['public-clouds'][profile_name])
             else:
                 try:
-                    _auth_update(cloud, vendors.CLOUD_DEFAULTS[cloud_name])
+                    _auth_update(cloud, vendors.CLOUD_DEFAULTS[profile_name])
                 except KeyError:
                     # Can't find the requested vendor config, go about business
                     pass
@@ -241,7 +278,7 @@ class OpenStackConfig(object):
 
         clouds = []
 
-        for cloud in self._get_cloud_sections():
+        for cloud in self.get_cloud_names():
             for region in self._get_regions(cloud).split(','):
                 clouds.append(self.get_one_cloud(cloud, region_name=region))
         return clouds
@@ -344,7 +381,7 @@ class OpenStackConfig(object):
         :param kwargs: Additional configuration options
         """
 
-        if cloud is None and self.envvar_key in self._get_cloud_sections():
+        if cloud is None and self.envvar_key in self.get_cloud_names():
             cloud = self.envvar_key
 
         args = self._fix_args(kwargs, argparse=argparse)
@@ -357,7 +394,10 @@ class OpenStackConfig(object):
         # Can't just do update, because None values take over
         for (key, val) in iter(args.items()):
             if val is not None:
-                config[key] = val
+                if key == 'auth' and config[key] is not None:
+                    config[key] = _auth_update(config[key], val)
+                else:
+                    config[key] = val
 
         for key in BOOL_KEYS:
             if key in config:
@@ -376,8 +416,44 @@ class OpenStackConfig(object):
             if hasattr(value, 'format'):
                 config[key] = value.format(**config)
 
+        if cloud is None:
+            cloud_name = ''
+        else:
+            cloud_name = str(cloud)
         return cloud_config.CloudConfig(
-            name=cloud, region=config['region_name'], config=config)
+            name=cloud_name, region=config['region_name'],
+            config=self._normalize_keys(config))
+
+    @staticmethod
+    def set_one_cloud(config_file, cloud, set_config=None):
+        """Set a single cloud configuration.
+
+        :param string config_file:
+            The path to the config file to edit. If this file does not exist
+            it will be created.
+        :param string cloud:
+            The name of the configuration to save to clouds.yaml
+        :param dict set_config: Configuration options to be set
+        """
+
+        set_config = set_config or {}
+        cur_config = {}
+        try:
+            with open(config_file) as fh:
+                cur_config = yaml.safe_load(fh)
+        except IOError as e:
+            # Not no such file
+            if e.errno != 2:
+                raise
+            pass
+
+        clouds_config = cur_config.get('clouds', {})
+        cloud_config = _auth_update(clouds_config.get(cloud, {}), set_config)
+        clouds_config[cloud] = cloud_config
+        cur_config['clouds'] = clouds_config
+
+        with open(config_file, 'w') as fh:
+            yaml.safe_dump(cur_config, fh, default_flow_style=False)
 
 if __name__ == '__main__':
     config = OpenStackConfig().get_all_clouds()
