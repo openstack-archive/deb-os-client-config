@@ -66,7 +66,6 @@ Description: OpenStack client configuation library - Python 2.x
 
 Package: python3-os-client-config
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: python3-pbr,
          python3-yaml,
          ${misc:Depends},
@@ -92,7 +91,6 @@ Description: OpenStack client configuation library - Python 3.x
 Package: python-os-client-config-doc
 Section: doc
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: ${misc:Depends},
          ${sphinxdoc:Depends},
 Description: OpenStack client configuation library - doc
