@@ -51,6 +51,14 @@ class TestEnviron(base.TestCase):
         cc = c.get_one_cloud('override')
         self._assert_cloud_details(cc)
 
+    def test_envvar_prefer_ipv6_override(self):
+        self.useFixture(
+            fixtures.EnvironmentVariable('OS_PREFER_IPV6', 'false'))
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+        cc = c.get_one_cloud('_test-cloud_')
+        self.assertFalse(cc.prefer_ipv6)
+
     def test_environ_exists(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    vendor_files=[self.vendor_yaml])
@@ -75,4 +83,13 @@ class TestEnviron(base.TestCase):
         cc = c.get_one_cloud('_test-cloud_')
         self._assert_cloud_details(cc)
         cc = c.get_one_cloud('_test_cloud_no_vendor')
+        self._assert_cloud_details(cc)
+
+    def test_config_file_override(self):
+        self.useFixture(
+            fixtures.EnvironmentVariable(
+                'OS_CLIENT_CONFIG_FILE', self.cloud_yaml))
+        c = config.OpenStackConfig(config_files=[],
+                                   vendor_files=[self.vendor_yaml])
+        cc = c.get_one_cloud('_test-cloud_')
         self._assert_cloud_details(cc)

@@ -38,6 +38,9 @@ VENDOR_CONF = {
     }
 }
 USER_CONF = {
+    'client': {
+        'prefer_ipv6': True,
+    },
     'clouds': {
         '_test-cloud_': {
             'profile': '_test_cloud_in_our_cloud',
@@ -56,6 +59,33 @@ USER_CONF = {
             },
             'region-name': 'test-region',
         },
+        '_test-cloud-int-project_': {
+            'auth': {
+                'username': 'testuser',
+                'password': 'testpass',
+                'project_id': 12345,
+            },
+            'region_name': 'test-region',
+        },
+        '_test_cloud_regions': {
+            'auth': {
+                'username': 'testuser',
+                'password': 'testpass',
+                'project-id': 'testproject',
+            },
+            'regions': [
+                'region1',
+                'region2',
+            ],
+        },
+        '_test_cloud_hyphenated': {
+            'auth': {
+                'username': 'testuser',
+                'password': 'testpass',
+                'project-id': '12345',
+            },
+            'region_name': 'test-region',
+        }
     },
     'cache': {'max_age': 1},
 }

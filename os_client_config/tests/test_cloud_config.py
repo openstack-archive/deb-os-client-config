@@ -17,6 +17,16 @@ from os_client_config.tests import base
 
 
 fake_config_dict = {'a': 1, 'os_b': 2, 'c': 3, 'os_c': 4}
+fake_services_dict = {
+    'compute_api_version': 2,
+    'compute_endpoint': 'http://compute.example.com',
+    'compute_region_name': 'region-bl',
+    'interface': 'public',
+    'image_service_type': 'mage',
+    'identity_interface': 'admin',
+    'identity_service_name': 'locks',
+    'auth': {'password': 'hunter2', 'username': 'AzureDiamond'},
+}
 
 
 class TestCloudConfig(base.TestCase):
@@ -38,6 +48,9 @@ class TestCloudConfig(base.TestCase):
 
         # Lookup mystery attribute
         self.assertIsNone(cc.x)
+
+        # Test default ipv6
+        self.assertFalse(cc.prefer_ipv6)
 
     def test_iteration(self):
         cc = cloud_config.CloudConfig("test1", "region-al", fake_config_dict)
@@ -67,12 +80,12 @@ class TestCloudConfig(base.TestCase):
 
         config_dict['verify'] = False
         cc = cloud_config.CloudConfig("test1", "region-xx", config_dict)
-        (verify, cacert) = cc.get_requests_verify_args()
+        (verify, cert) = cc.get_requests_verify_args()
         self.assertFalse(verify)
 
         config_dict['verify'] = True
         cc = cloud_config.CloudConfig("test1", "region-xx", config_dict)
-        (verify, cacert) = cc.get_requests_verify_args()
+        (verify, cert) = cc.get_requests_verify_args()
         self.assertTrue(verify)
 
     def test_verify_cacert(self):
@@ -81,10 +94,51 @@ class TestCloudConfig(base.TestCase):
 
         config_dict['verify'] = False
         cc = cloud_config.CloudConfig("test1", "region-xx", config_dict)
-        (verify, cacert) = cc.get_requests_verify_args()
+        (verify, cert) = cc.get_requests_verify_args()
         self.assertFalse(verify)
 
         config_dict['verify'] = True
         cc = cloud_config.CloudConfig("test1", "region-xx", config_dict)
-        (verify, cacert) = cc.get_requests_verify_args()
+        (verify, cert) = cc.get_requests_verify_args()
         self.assertEqual("certfile", verify)
+
+    def test_cert_with_key(self):
+        config_dict = copy.deepcopy(fake_config_dict)
+        config_dict['cacert'] = None
+        config_dict['verify'] = False
+
+        config_dict['cert'] = 'cert'
+        config_dict['key'] = 'key'
+
+        cc = cloud_config.CloudConfig("test1", "region-xx", config_dict)
+        (verify, cert) = cc.get_requests_verify_args()
+        self.assertEqual(("cert", "key"), cert)
+
+    def test_ipv6(self):
+        cc = cloud_config.CloudConfig(
+            "test1", "region-al", fake_config_dict, prefer_ipv6=True)
+        self.assertTrue(cc.prefer_ipv6)
+
+    def test_getters(self):
+        cc = cloud_config.CloudConfig("test1", "region-al", fake_services_dict)
+
+        self.assertEqual(['compute', 'identity', 'image'],
+                         sorted(cc.get_services()))
+        self.assertEqual({'password': 'hunter2', 'username': 'AzureDiamond'},
+                         cc.get_auth_args())
+        self.assertEqual('public', cc.get_interface())
+        self.assertEqual('public', cc.get_interface('compute'))
+        self.assertEqual('admin', cc.get_interface('identity'))
+        self.assertEqual('region-al', cc.get_region_name())
+        self.assertEqual('region-al', cc.get_region_name('image'))
+        self.assertEqual('region-bl', cc.get_region_name('compute'))
+        self.assertEqual(None, cc.get_api_version('image'))
+        self.assertEqual(2, cc.get_api_version('compute'))
+        self.assertEqual('mage', cc.get_service_type('image'))
+        self.assertEqual('compute', cc.get_service_type('compute'))
+        self.assertEqual('http://compute.example.com',
+                         cc.get_endpoint('compute'))
+        self.assertEqual(None,
+                         cc.get_endpoint('image'))
+        self.assertEqual(None, cc.get_service_name('compute'))
+        self.assertEqual('locks', cc.get_service_name('identity'))

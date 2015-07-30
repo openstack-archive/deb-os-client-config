@@ -12,29 +12,21 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import glob
 import os
 
 import yaml
 
-_yaml_path = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), 'defaults.yaml')
-_defaults = None
+_vendors_path = os.path.dirname(os.path.realpath(__file__))
+_vendor_defaults = None
 
 
-def get_defaults():
-    global _defaults
-    if not _defaults:
-        # Python language specific defaults
-        # These are defaults related to use of python libraries, they are
-        # not qualities of a cloud.
-        _defaults = dict(
-            api_timeout=None,
-            verify=True,
-            cacert=None,
-            cert=None,
-            key=None,
-        )
-        with open(_yaml_path, 'r') as yaml_file:
-            _defaults.update(yaml.load(yaml_file.read()))
-
-    return _defaults.copy()
+def get_profile(profile_name):
+    global _vendor_defaults
+    if _vendor_defaults is None:
+        _vendor_defaults = {}
+        for vendor in glob.glob(os.path.join(_vendors_path, '*.yaml')):
+            with open(vendor, 'r') as f:
+                vendor_data = yaml.load(f)
+                _vendor_defaults[vendor_data['name']] = vendor_data['profile']
+    return _vendor_defaults.get(profile_name)

@@ -14,6 +14,7 @@
 
 
 import os
+import warnings
 
 import appdirs
 import yaml
@@ -63,10 +64,17 @@ BOOL_KEYS = ('insecure', 'cache')
 #                Remove this sometime in June 2015 once OSC is comfortably
 #                changed-over and global-defaults is updated.
 def set_default(key, value):
+    warnings.warn(
+        "Use of set_default() is deprecated. Defaults should be set with the "
+        "`override_defaults` parameter of OpenStackConfig."
+    )
+    defaults.get_defaults()  # make sure the dict is initialized
     defaults._defaults[key] = value
 
 
 def get_boolean(value):
+    if type(value) is bool:
+        return value
     if value.lower() == 'true':
         return True
     return False
@@ -103,6 +111,10 @@ class OpenStackConfig(object):
         self._config_files = config_files or CONFIG_FILES
         self._vendor_files = vendor_files or VENDOR_FILES
 
+        config_file_override = os.environ.pop('OS_CLIENT_CONFIG_FILE', None)
+        if config_file_override:
+            self._config_files.insert(0, config_file_override)
+
         self.defaults = defaults.get_defaults()
         if override_defaults:
             self.defaults.update(override_defaults)
@@ -115,14 +127,23 @@ class OpenStackConfig(object):
         if 'clouds' not in self.cloud_config:
             self.cloud_config['clouds'] = {}
 
+        # Grab ipv6 preference settings from env
+        client_config = self.cloud_config.get('client', {})
+        self.prefer_ipv6 = get_boolean(
+            os.environ.pop(
+                'OS_PREFER_IPV6', client_config.get(
+                    'prefer_ipv6', client_config.get(
+                        'prefer-ipv6', False))))
+
         # Next, process environment variables and add them to the mix
         self.envvar_key = os.environ.pop('OS_CLOUD_NAME', 'envvars')
         if self.envvar_key in self.cloud_config['clouds']:
             raise exceptions.OpenStackConfigException(
-                'clouds.yaml defines a cloud named "{0}", but'
-                ' OS_CLOUD_NAME is also set to "{0}". Please rename'
+                '"{0}" defines a cloud named "{1}", but'
+                ' OS_CLOUD_NAME is also set to "{1}". Please rename'
                 ' either your environment based cloud, or one of your'
-                ' file-based clouds.'.format(self.envvar_key))
+                ' file-based clouds.'.format(self.config_filename,
+                                             self.envvar_key))
 
         envvars = _get_os_environ()
         if envvars:
@@ -187,14 +208,24 @@ class OpenStackConfig(object):
         return self._cache_arguments
 
     def _get_regions(self, cloud):
-        try:
-            return self.cloud_config['clouds'][cloud]['region_name']
-        except KeyError:
-            # No region configured
-            return ''
+        if cloud not in self.cloud_config['clouds']:
+            return ['']
+        config = self._normalize_keys(self.cloud_config['clouds'][cloud])
+        if 'regions' in config:
+            return config['regions']
+        elif 'region_name' in config:
+            regions = config['region_name'].split(',')
+            if len(regions) > 1:
+                warnings.warn(
+                    "Comma separated lists in region_name are deprecated."
+                    " Please use a yaml list in the regions"
+                    " parameter in {0} instead.".format(self.config_filename))
+            return regions
+        else:
+            return ['']
 
     def _get_region(self, cloud=None):
-        return self._get_regions(cloud).split(',')[0]
+        return self._get_regions(cloud)[0]
 
     def get_cloud_names(self):
         return self.cloud_config['clouds'].keys()
@@ -216,16 +247,24 @@ class OpenStackConfig(object):
         # Expand a profile if it exists. 'cloud' is an old confusing name
         # for this.
         profile_name = our_cloud.get('profile', our_cloud.get('cloud', None))
-        if profile_name:
+        if profile_name and profile_name != self.envvar_key:
+            if 'cloud' in our_cloud:
+                warnings.warn(
+                    "{0} use the keyword 'cloud' to reference a known "
+                    "vendor profile. This has been deprecated in favor of the "
+                    "'profile' keyword.".format(self.config_filename))
             vendor_filename, vendor_file = self._load_vendor_file()
             if vendor_file and profile_name in vendor_file['public-clouds']:
                 _auth_update(cloud, vendor_file['public-clouds'][profile_name])
             else:
-                try:
-                    _auth_update(cloud, vendors.CLOUD_DEFAULTS[profile_name])
-                except KeyError:
+                profile_data = vendors.get_profile(profile_name)
+                if profile_data:
+                    _auth_update(cloud, profile_data)
+                else:
                     # Can't find the requested vendor config, go about business
-                    pass
+                    warnings.warn("Couldn't find the vendor profile '{0}', for"
+                                  " the cloud '{1}'".format(profile_name,
+                                                            name))
 
         if 'auth' not in cloud:
             cloud['auth'] = dict()
@@ -239,22 +278,25 @@ class OpenStackConfig(object):
     def _fix_backwards_madness(self, cloud):
         cloud = self._fix_backwards_project(cloud)
         cloud = self._fix_backwards_auth_plugin(cloud)
+        cloud = self._fix_backwards_interface(cloud)
         return cloud
 
     def _fix_backwards_project(self, cloud):
         # Do the lists backwards so that project_name is the ultimate winner
         mappings = {
-            'project_name': ('tenant_id', 'project_id',
-                             'tenant_name', 'project_name'),
+            'project_name': ('tenant_id', 'tenant-id',
+                             'project_id', 'project-id',
+                             'tenant_name', 'tenant-name',
+                             'project_name', 'project-name'),
         }
         for target_key, possible_values in mappings.items():
             target = None
             for key in possible_values:
                 if key in cloud:
-                    target = cloud[key]
+                    target = str(cloud[key])
                     del cloud[key]
                 if key in cloud['auth']:
-                    target = cloud['auth'][key]
+                    target = str(cloud['auth'][key])
                     del cloud['auth'][key]
             if target:
                 cloud['auth'][target_key] = target
@@ -274,12 +316,19 @@ class OpenStackConfig(object):
             cloud[target_key] = target
         return cloud
 
+    def _fix_backwards_interface(self, cloud):
+        for key in cloud.keys():
+            if key.endswith('endpoint_type'):
+                target_key = key.replace('endpoint_type', 'interface')
+                cloud[target_key] = cloud.pop(key)
+        return cloud
+
     def get_all_clouds(self):
 
         clouds = []
 
         for cloud in self.get_cloud_names():
-            for region in self._get_regions(cloud).split(','):
+            for region in self._get_regions(cloud):
                 clouds.append(self.get_one_cloud(cloud, region_name=region))
         return clouds
 
@@ -391,6 +440,10 @@ class OpenStackConfig(object):
 
         config = self._get_base_cloud_config(cloud)
 
+        # Regions is a list that we can use to create a list of cloud/region
+        # objects. It does not belong in the single-cloud dict
+        config.pop('regions', None)
+
         # Can't just do update, because None values take over
         for (key, val) in iter(args.items()):
             if val is not None:
@@ -416,13 +469,16 @@ class OpenStackConfig(object):
             if hasattr(value, 'format'):
                 config[key] = value.format(**config)
 
+        prefer_ipv6 = config.pop('prefer_ipv6', self.prefer_ipv6)
+
         if cloud is None:
             cloud_name = ''
         else:
             cloud_name = str(cloud)
         return cloud_config.CloudConfig(
             name=cloud_name, region=config['region_name'],
-            config=self._normalize_keys(config))
+            config=self._normalize_keys(config),
+            prefer_ipv6=prefer_ipv6)
 
     @staticmethod
     def set_one_cloud(config_file, cloud, set_config=None):
