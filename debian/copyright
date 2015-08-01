@@ -3,11 +3,12 @@ Upstream-Name: os-client-config
 Source: git://github.com/stackforge/os-client-config.git
 
 Files: debian/*
-Copyright: (c) 2014, Thomas Goirand <zigo@debian.org>
+Copyright: (c) 2014-2015, Thomas Goirand <zigo@debian.org>
+           (c) 2015, gustavo panizzo <gfa@zumbi.com.ar>
 License: Apache-2
 
 Files: *
-Copyright: (c) 2014, OpenStack Foundation
+Copyright: (c) 2014-2015, OpenStack Foundation
            (c) 2014 Hewlett-Packard Development Company, L.P.
 License: Apache-2
 
