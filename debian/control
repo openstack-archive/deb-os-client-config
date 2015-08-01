@@ -41,7 +41,6 @@ Homepage: http://github.com/stackforge/os-client-config
 
 Package: python-os-client-config
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: python-pbr,
          python-yaml,
          ${misc:Depends},
