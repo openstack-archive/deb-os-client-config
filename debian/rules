@@ -40,7 +40,7 @@ endif
 
 override_dh_clean:
 	dh_clean -O--buildsystem=python_distutils
-	rm -rf build
+	rm -rf build .testrepository
 
 override_dh_sphinxdoc:
 	sphinx-build -b html doc/source debian/python-os-client-config-doc/usr/share/doc/python-os-client-config-doc/html
