@@ -1,6 +1,7 @@
 python-os-client-config (1.6.0-2) experimental; urgency=medium
 
   * Also includes all yaml files.
+  * Watch file using github and not broken PyPi.
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 10 Sep 2015 08:48:43 +0000
 
