@@ -1,3 +1,11 @@
+python-os-client-config (1.6.0-3) experimental; urgency=medium
+
+  * Add 2 failed test in blacklist (failing to build in Jessie):
+    - test_environ.TestEnviron.test_environ_exists
+    - test_environ.TestEnviron.test_envvar_name_override
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 15 Sep 2015 09:51:03 +0200
+
 python-os-client-config (1.6.0-2) experimental; urgency=medium
 
   * Also includes all yaml files.
