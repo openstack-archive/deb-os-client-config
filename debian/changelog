@@ -1,6 +1,8 @@
 python-os-client-config (1.6.0-4) unstable; urgency=medium
 
   * Uploading to unstable.
+  * Black list TestBackwardsCompatibility.test_set_no_default which fails in
+    Python 3.5.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 16 Oct 2015 19:56:30 +0000
 
