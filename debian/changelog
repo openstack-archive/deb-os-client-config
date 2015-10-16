@@ -1,3 +1,9 @@
+python-os-client-config (1.6.0-4) unstable; urgency=medium
+
+  * Uploading to unstable.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 16 Oct 2015 19:56:30 +0000
+
 python-os-client-config (1.6.0-3) experimental; urgency=medium
 
   * Add 2 failed test in blacklist (failing to build in Jessie):
