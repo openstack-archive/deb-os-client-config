@@ -43,7 +43,7 @@ class TestConfig(base.TestCase):
     def test_get_one_cloud(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    vendor_files=[self.vendor_yaml])
-        cloud = c.get_one_cloud()
+        cloud = c.get_one_cloud(validate=False)
         self.assertIsInstance(cloud, cloud_config.CloudConfig)
         self.assertEqual(cloud.name, '')
 
@@ -61,12 +61,12 @@ class TestConfig(base.TestCase):
         )
 
     def test_get_one_cloud_auth_override_defaults(self):
-        default_options = {'auth_type': 'token'}
+        default_options = {'compute_api_version': '4'}
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    override_defaults=default_options)
         cc = c.get_one_cloud(cloud='_test-cloud_', auth={'username': 'user'})
         self.assertEqual('user', cc.auth['username'])
-        self.assertEqual('token', cc.auth_type)
+        self.assertEqual('4', cc.compute_api_version)
         self.assertEqual(
             defaults._defaults['identity_api_version'],
             cc.identity_api_version,
@@ -89,13 +89,37 @@ class TestConfig(base.TestCase):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    vendor_files=[self.vendor_yaml])
         cc = c.get_one_cloud('_test-cloud-int-project_')
-        self.assertEqual('12345', cc.auth['project_name'])
+        self.assertEqual('12345', cc.auth['project_id'])
+
+    def test_get_one_cloud_with_domain_id(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+        cc = c.get_one_cloud('_test-cloud-domain-id_')
+        self.assertEqual('6789', cc.auth['user_domain_id'])
+        self.assertEqual('123456789', cc.auth['project_domain_id'])
+        self.assertNotIn('domain_id', cc.auth)
+        self.assertNotIn('domain-id', cc.auth)
 
     def test_get_one_cloud_with_hyphenated_project_id(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    vendor_files=[self.vendor_yaml])
         cc = c.get_one_cloud('_test_cloud_hyphenated')
-        self.assertEqual('12345', cc.auth['project_name'])
+        self.assertEqual('12345', cc.auth['project_id'])
+
+    def test_get_one_cloud_with_hyphenated_kwargs(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+        args = {
+            'auth': {
+                'username': 'testuser',
+                'password': 'testpass',
+                'project-id': '12345',
+                'auth-url': 'http://example.com/v2',
+            },
+            'region_name': 'test-region',
+        }
+        cc = c.get_one_cloud(**args)
+        self.assertEqual('http://example.com/v2', cc.auth['auth_url'])
 
     def test_no_environ(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
@@ -109,19 +133,31 @@ class TestConfig(base.TestCase):
         for k in os.environ.keys():
             if k.startswith('OS_'):
                 self.useFixture(fixtures.EnvironmentVariable(k))
-        c.get_one_cloud(cloud='defaults')
+        c.get_one_cloud(cloud='defaults', validate=False)
 
     def test_prefer_ipv6_true(self):
-        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
-                                   vendor_files=[self.vendor_yaml])
-        cc = c.get_one_cloud(cloud='_test-cloud_')
+        c = config.OpenStackConfig(config_files=[self.no_yaml],
+                                   vendor_files=[self.no_yaml])
+        cc = c.get_one_cloud(cloud='defaults', validate=False)
         self.assertTrue(cc.prefer_ipv6)
 
     def test_prefer_ipv6_false(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+        cc = c.get_one_cloud(cloud='_test-cloud_')
+        self.assertFalse(cc.prefer_ipv6)
+
+    def test_force_ipv4_true(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+        cc = c.get_one_cloud(cloud='_test-cloud_')
+        self.assertTrue(cc.force_ipv4)
+
+    def test_force_ipv4_false(self):
         c = config.OpenStackConfig(config_files=[self.no_yaml],
                                    vendor_files=[self.no_yaml])
-        cc = c.get_one_cloud(cloud='defaults')
-        self.assertFalse(cc.prefer_ipv6)
+        cc = c.get_one_cloud(cloud='defaults', validate=False)
+        self.assertFalse(cc.force_ipv4)
 
     def test_get_one_cloud_auth_merge(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml])
@@ -132,7 +168,8 @@ class TestConfig(base.TestCase):
     def test_get_cloud_names(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml])
         self.assertEqual(
-            ['_test-cloud-int-project_',
+            ['_test-cloud-domain-id_',
+             '_test-cloud-int-project_',
              '_test-cloud_',
              '_test_cloud_hyphenated',
              '_test_cloud_no_vendor',
@@ -144,7 +181,7 @@ class TestConfig(base.TestCase):
         for k in os.environ.keys():
             if k.startswith('OS_'):
                 self.useFixture(fixtures.EnvironmentVariable(k))
-        c.get_one_cloud(cloud='defaults')
+        c.get_one_cloud(cloud='defaults', validate=False)
         self.assertEqual(['defaults'], sorted(c.get_cloud_names()))
 
     def test_set_one_cloud_creates_file(self):
@@ -168,7 +205,8 @@ class TestConfig(base.TestCase):
         resulting_cloud_config = {
             'auth': {
                 'password': 'newpass',
-                'username': 'testuser'
+                'username': 'testuser',
+                'auth_url': 'http://example.com/v2',
             },
             'cloud': 'new_cloud',
             'profile': '_test_cloud_in_our_cloud',
@@ -188,10 +226,15 @@ class TestConfigArgparse(base.TestCase):
     def setUp(self):
         super(TestConfigArgparse, self).setUp()
 
-        self.options = argparse.Namespace(
+        self.args = dict(
+            auth_url='http://example.com/v2',
+            username='user',
+            password='password',
+            project_name='project',
             region_name='other-test-region',
             snack_type='cookie',
         )
+        self.options = argparse.Namespace(**self.args)
 
     def test_get_one_cloud_argparse(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
@@ -206,9 +249,34 @@ class TestConfigArgparse(base.TestCase):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    vendor_files=[self.vendor_yaml])
 
-        cc = c.get_one_cloud(cloud='', argparse=self.options)
+        cc = c.get_one_cloud(argparse=self.options)
         self.assertIsNone(cc.cloud)
-        self.assertNotIn('username', cc.auth)
+        self.assertEqual(cc.region_name, 'other-test-region')
+        self.assertEqual(cc.snack_type, 'cookie')
+
+    def test_get_one_cloud_just_kwargs(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+
+        cc = c.get_one_cloud(**self.args)
+        self.assertIsNone(cc.cloud)
+        self.assertEqual(cc.region_name, 'other-test-region')
+        self.assertEqual(cc.snack_type, 'cookie')
+
+    def test_get_one_cloud_dash_kwargs(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+
+        args = {
+            'auth-url': 'http://example.com/v2',
+            'username': 'user',
+            'password': 'password',
+            'project_name': 'project',
+            'region_name': 'other-test-region',
+            'snack_type': 'cookie',
+        }
+        cc = c.get_one_cloud(**args)
+        self.assertIsNone(cc.cloud)
         self.assertEqual(cc.region_name, 'other-test-region')
         self.assertEqual(cc.snack_type, 'cookie')
 
@@ -229,6 +297,23 @@ class TestConfigArgparse(base.TestCase):
         self._assert_cloud_details(cc)
         self.assertEqual(cc.region_name, 'region1')
         self.assertIsNone(cc.snack_type)
+
+    def test_get_one_cloud_bad_region(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+
+        self.assertRaises(
+            exceptions.OpenStackConfigException,
+            c.get_one_cloud,
+            cloud='_test_cloud_regions', region_name='bad')
+
+    def test_get_one_cloud_bad_region_no_regions(self):
+        c = config.OpenStackConfig(config_files=[self.cloud_yaml],
+                                   vendor_files=[self.vendor_yaml])
+
+        cc = c.get_one_cloud(cloud='_test-cloud_', region_name='bad_region')
+        self._assert_cloud_details(cc)
+        self.assertEqual(cc.region_name, 'bad_region')
 
     def test_get_one_cloud_no_argparse_region2(self):
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
@@ -270,11 +355,11 @@ class TestConfigDefault(base.TestCase):
         self.assertEqual('password', cc.auth_type)
 
     def test_set_default_before_init(self):
-        config.set_default('auth_type', 'token')
+        config.set_default('identity_api_version', '4')
         c = config.OpenStackConfig(config_files=[self.cloud_yaml],
                                    vendor_files=[self.vendor_yaml])
         cc = c.get_one_cloud(cloud='_test-cloud_', argparse=None)
-        self.assertEqual('token', cc.auth_type)
+        self.assertEqual('4', cc.identity_api_version)
 
 
 class TestBackwardsCompatibility(base.TestCase):
@@ -295,4 +380,4 @@ class TestBackwardsCompatibility(base.TestCase):
             'interface': 'public',
             'auth_type': 'v3password',
         }
-        self.assertEqual(expected, result)
+        self.assertDictEqual(expected, result)

@@ -1,6 +1,6 @@
-===============================
+================
 os-client-config
-===============================
+================
 
 `os-client-config` is a library for collecting client configuration for
 using an OpenStack cloud in a consistent and comprehensive manner. It
@@ -27,7 +27,9 @@ it by setting `OS_CLOUD_NAME`.
 
 Service specific settings, like the nova service type, are set with the
 default service type as a prefix. For instance, to set a special service_type
-for trove set::
+for trove set
+
+::
 
   export OS_DATABASE_SERVICE_TYPE=rax:database
 
@@ -166,8 +168,14 @@ understands passing through cache settings to dogpile.cache, with the following
 behaviors:
 
 * Listing no config settings means you get a null cache.
-* `cache.max_age` and nothing else gets you memory cache.
+* `cache.expiration_time` and nothing else gets you memory cache.
 * Otherwise, `cache.class` and `cache.arguments` are passed in
+
+Different cloud behaviors are also differently expensive to deal with. If you
+want to get really crazy and tweak stuff, you can specify different expiration
+times on a per-resource basis by passing values, in seconds to an expiration
+mapping keyed on the singular name of the resource. A value of `-1` indicates
+that the resource should never expire.
 
 `os-client-config` does not actually cache anything itself, but it collects
 and presents the cache information so that your various applications that
@@ -177,10 +185,13 @@ are connecting to OpenStack can share a cache should you desire.
 
   cache:
     class: dogpile.cache.pylibmc
-    max_age: 3600
+    expiration_time: 3600
     arguments:
       url:
         - 127.0.0.1
+    expiration:
+      server: 5
+      flavor: -1
   clouds:
     mordred:
       profile: hp
@@ -195,15 +206,18 @@ are connecting to OpenStack can share a cache should you desire.
 IPv6
 ----
 
-IPv6 may be a thing you would prefer to use not only if the cloud supports it,
-but also if your local machine support it. A simple boolean flag is settable
-either in an environment variable, `OS_PREFER_IPV6`, or in the client section
-of the clouds.yaml.
+IPv6 is the future, and you should always use it if your cloud supports it and
+if your local network supports it. Both of those are easily detectable and all
+friendly software should do the right thing. However, sometimes you might
+exist in a location where you have an IPv6 stack, but something evil has
+caused it to not actually function. In that case, there is a config option
+you can set to unbreak you `force_ipv4`, or `OS_FORCE_IPV4` boolean
+environment variable.
 
 ::
 
   client:
-    prefer_ipv6: true
+    force_ipv4: true
   clouds:
     mordred:
       profile: hp
@@ -220,14 +234,14 @@ of the clouds.yaml.
         project_name: mordred@inaugust.com
       region_name: DFW
 
-The above snippet will tell client programs to prefer returning an IPv6
-address. This will result in calls to, for instance, `shade`'s `get_public_ip`
-to return an IPv4 address on HP, and an IPv6 address on Rackspace.
+The above snippet will tell client programs to prefer returning an IPv4
+address.
 
 Usage
 -----
 
 The simplest and least useful thing you can do is:
+
 ::
 
   python -m os_client_config.config
@@ -236,16 +250,19 @@ Which will print out whatever if finds for your config. If you want to use
 it from python, which is much more likely what you want to do, things like:
 
 Get a named cloud.
+
 ::
 
   import os_client_config
 
   cloud_config = os_client_config.OpenStackConfig().get_one_cloud(
-      'hp', 'region-b.geo-1')
+      'hp', region_name='region-b.geo-1')
   print(cloud_config.name, cloud_config.region, cloud_config.config)
 
 Or, get all of the clouds.
+
 ::
+
   import os_client_config
 
   cloud_config = os_client_config.OpenStackConfig().get_all_clouds()

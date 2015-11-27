@@ -1,7 +1,0 @@
-name: auro
-profile:
-  auth:
-    auth_url: https://api.auro.io:5000/v2.0
-  region_name: RegionOne
-  secgroup_source: nova
-  floating_ip_source: nova

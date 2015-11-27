@@ -31,6 +31,7 @@ VENDOR_CONF = {
     'public-clouds': {
         '_test_cloud_in_our_cloud': {
             'auth': {
+                'auth_url': 'http://example.com/v2',
                 'username': 'testotheruser',
                 'project_name': 'testproject',
             },
@@ -38,13 +39,21 @@ VENDOR_CONF = {
     }
 }
 USER_CONF = {
+    'cache': {
+        'max_age': '1',
+        'expiration': {
+            'server': 5,
+            'image': '7',
+        },
+    },
     'client': {
-        'prefer_ipv6': True,
+        'force_ipv4': True,
     },
     'clouds': {
         '_test-cloud_': {
             'profile': '_test_cloud_in_our_cloud',
             'auth': {
+                'auth_url': 'http://example.com/v2',
                 'username': 'testuser',
                 'password': 'testpass',
             },
@@ -53,6 +62,7 @@ USER_CONF = {
         '_test_cloud_no_vendor': {
             'profile': '_test_non_existant_cloud',
             'auth': {
+                'auth_url': 'http://example.com/v2',
                 'username': 'testuser',
                 'password': 'testpass',
                 'project_name': 'testproject',
@@ -64,6 +74,18 @@ USER_CONF = {
                 'username': 'testuser',
                 'password': 'testpass',
                 'project_id': 12345,
+                'auth_url': 'http://example.com/v2',
+            },
+            'region_name': 'test-region',
+        },
+        '_test-cloud-domain-id_': {
+            'auth': {
+                'username': 'testuser',
+                'password': 'testpass',
+                'project_id': 12345,
+                'auth_url': 'http://example.com/v2',
+                'domain_id': '6789',
+                'project_domain_id': '123456789',
             },
             'region_name': 'test-region',
         },
@@ -72,6 +94,7 @@ USER_CONF = {
                 'username': 'testuser',
                 'password': 'testpass',
                 'project-id': 'testproject',
+                'auth_url': 'http://example.com/v2',
             },
             'regions': [
                 'region1',
@@ -83,11 +106,11 @@ USER_CONF = {
                 'username': 'testuser',
                 'password': 'testpass',
                 'project-id': '12345',
+                'auth_url': 'http://example.com/v2',
             },
             'region_name': 'test-region',
         }
     },
-    'cache': {'max_age': 1},
 }
 NO_CONF = {
     'cache': {'max_age': 1},
@@ -132,4 +155,12 @@ class TestCase(base.BaseTestCase):
         self.assertIsNone(cc.cloud)
         self.assertIn('username', cc.auth)
         self.assertEqual('testuser', cc.auth['username'])
-        self.assertEqual('testproject', cc.auth['project_name'])
+        self.assertFalse(cc.config['image_api_use_tasks'])
+        self.assertTrue('project_name' in cc.auth or 'project_id' in cc.auth)
+        if 'project_name' in cc.auth:
+            self.assertEqual('testproject', cc.auth['project_name'])
+        elif 'project_id' in cc.auth:
+            self.assertEqual('testproject', cc.auth['project_id'])
+        self.assertEqual(cc.get_cache_expiration_time(), 1)
+        self.assertEqual(cc.get_cache_resource_expiration('server'), 5.0)
+        self.assertEqual(cc.get_cache_resource_expiration('image'), 7.0)
