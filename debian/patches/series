@@ -1,1 +1,1 @@
-include-all-yaml-files.patch
+also-package-json-files.patch
