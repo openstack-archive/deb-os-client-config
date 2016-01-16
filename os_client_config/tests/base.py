@@ -16,6 +16,7 @@
 # under the License.
 
 
+import copy
 import os
 import tempfile
 
@@ -64,7 +65,6 @@ USER_CONF = {
             'auth': {
                 'auth_url': 'http://example.com/v2',
                 'username': 'testuser',
-                'password': 'testpass',
                 'project_name': 'testproject',
             },
             'region-name': 'test-region',
@@ -97,8 +97,18 @@ USER_CONF = {
                 'auth_url': 'http://example.com/v2',
             },
             'regions': [
-                'region1',
-                'region2',
+                {
+                    'name': 'region1',
+                    'values': {
+                        'external_network': 'region1-network',
+                    }
+                },
+                {
+                    'name': 'region2',
+                    'values': {
+                        'external_network': 'my-network',
+                    }
+                }
             ],
         },
         '_test_cloud_hyphenated': {
@@ -109,8 +119,29 @@ USER_CONF = {
                 'auth_url': 'http://example.com/v2',
             },
             'region_name': 'test-region',
-        }
+        },
+        '_test-cloud_no_region': {
+            'profile': '_test_cloud_in_our_cloud',
+            'auth': {
+                'auth_url': 'http://example.com/v2',
+                'username': 'testuser',
+                'password': 'testpass',
+            },
+        },
     },
+    'ansible': {
+        'expand-hostvars': False,
+        'use_hostnames': True,
+    },
+}
+SECURE_CONF = {
+    'clouds': {
+        '_test_cloud_no_vendor': {
+            'auth': {
+                'password': 'testpass',
+            },
+        }
+    }
 }
 NO_CONF = {
     'cache': {'max_age': 1},
@@ -131,10 +162,11 @@ class TestCase(base.BaseTestCase):
         super(TestCase, self).setUp()
 
         self.useFixture(fixtures.NestedTempfile())
-        conf = dict(USER_CONF)
+        conf = copy.deepcopy(USER_CONF)
         tdir = self.useFixture(fixtures.TempDir())
         conf['cache']['path'] = tdir.path
         self.cloud_yaml = _write_yaml(conf)
+        self.secure_yaml = _write_yaml(SECURE_CONF)
         self.vendor_yaml = _write_yaml(VENDOR_CONF)
         self.no_yaml = _write_yaml(NO_CONF)
 
@@ -155,6 +187,7 @@ class TestCase(base.BaseTestCase):
         self.assertIsNone(cc.cloud)
         self.assertIn('username', cc.auth)
         self.assertEqual('testuser', cc.auth['username'])
+        self.assertEqual('testpass', cc.auth['password'])
         self.assertFalse(cc.config['image_api_use_tasks'])
         self.assertTrue('project_name' in cc.auth or 'project_id' in cc.auth)
         if 'project_name' in cc.auth:

@@ -12,6 +12,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import importlib
 import warnings
 
 from keystoneauth1 import adapter
@@ -20,7 +21,42 @@ from keystoneauth1 import session
 import requestsexceptions
 
 from os_client_config import _log
+from os_client_config import constructors
 from os_client_config import exceptions
+
+
+def _get_client(service_key):
+    class_mapping = constructors.get_constructor_mapping()
+    if service_key not in class_mapping:
+        raise exceptions.OpenStackConfigException(
+            "Service {service_key} is unkown. Please pass in a client"
+            " constructor or submit a patch to os-client-config".format(
+                service_key=service_key))
+    mod_name, ctr_name = class_mapping[service_key].rsplit('.', 1)
+    lib_name = mod_name.split('.')[0]
+    try:
+        mod = importlib.import_module(mod_name)
+    except ImportError:
+        raise exceptions.OpenStackConfigException(
+            "Client for '{service_key}' was requested, but"
+            " {mod_name} was unable to be imported. Either import"
+            " the module yourself and pass the constructor in as an argument,"
+            " or perhaps you do not have python-{lib_name} installed.".format(
+                service_key=service_key,
+                mod_name=mod_name,
+                lib_name=lib_name))
+    try:
+        ctr = getattr(mod, ctr_name)
+    except AttributeError:
+        raise exceptions.OpenStackConfigException(
+            "Client for '{service_key}' was requested, but although"
+            " {mod_name} imported fine, the constructor at {fullname}"
+            " as not found. Please check your installation, we have no"
+            " clue what is wrong with your computer.".format(
+                service_key=service_key,
+                mod_name=mod_name,
+                fullname=class_mapping[service_key]))
+    return ctr
 
 
 def _make_key(key, service_type):
@@ -128,8 +164,9 @@ class CloudConfig(object):
         return self.config.get(key, None)
 
     def get_endpoint(self, service_type):
-        key = _make_key('endpoint', service_type)
-        return self.config.get(key, None)
+        key = _make_key('endpoint_override', service_type)
+        old_key = _make_key('endpoint', service_type)
+        return self.config.get(key, self.config.get(old_key, None))
 
     @property
     def prefer_ipv6(self):
@@ -217,8 +254,8 @@ class CloudConfig(object):
         return endpoint
 
     def get_legacy_client(
-            self, service_key, client_class, interface_key=None,
-            pass_version_arg=True, **kwargs):
+            self, service_key, client_class=None, interface_key=None,
+            pass_version_arg=True, version=None, **kwargs):
         """Return a legacy OpenStack client object for the given config.
 
         Most of the OpenStack python-*client libraries have the same
@@ -250,19 +287,25 @@ class CloudConfig(object):
                                  already understand that this is the
                                  case for network, so it can be omitted in
                                  that case.
+        :param version: (optional) Version string to override the configured
+                                   version string.
         :param kwargs: (optional) keyword args are passed through to the
                        Client constructor, so this is in case anything
                        additional needs to be passed in.
         """
+        if not client_class:
+            client_class = _get_client(service_key)
+
         # Because of course swift is different
         if service_key == 'object-store':
             return self._get_swift_client(client_class=client_class, **kwargs)
         interface = self.get_interface(service_key)
         # trigger exception on lack of service
         endpoint = self.get_session_endpoint(service_key)
+        endpoint_override = self.get_endpoint(service_key)
 
         if not interface_key:
-            if service_key == 'image':
+            if service_key in ('image', 'key-manager'):
                 interface_key = 'interface'
             else:
                 interface_key = 'endpoint_type'
@@ -271,6 +314,7 @@ class CloudConfig(object):
             session=self.get_session(),
             service_name=self.get_service_name(service_key),
             service_type=self.get_service_type(service_key),
+            endpoint_override=endpoint_override,
             region_name=self.region)
 
         if service_key == 'image':
@@ -279,13 +323,21 @@ class CloudConfig(object):
             # would need to do if they were requesting 'image' - then
             # they necessarily have glanceclient installed
             from glanceclient.common import utils as glance_utils
-            endpoint, version = glance_utils.strip_version(endpoint)
-            constructor_kwargs['endpoint'] = endpoint
+            endpoint, detected_version = glance_utils.strip_version(endpoint)
+            # If the user has passed in a version, that's explicit, use it
+            if not version:
+                version = detected_version
+            # If the user has passed in or configured an override, use it.
+            # Otherwise, ALWAYS pass in an endpoint_override becuase
+            # we've already done version stripping, so we don't want version
+            # reconstruction to happen twice
+            if not endpoint_override:
+                constructor_kwargs['endpoint_override'] = endpoint
         constructor_kwargs.update(kwargs)
         constructor_kwargs[interface_key] = interface
-        constructor_args = []
         if pass_version_arg:
-            version = self.get_api_version(service_key)
+            if not version:
+                version = self.get_api_version(service_key)
             # Temporary workaround while we wait for python-openstackclient
             # to be able to handle 2.0 which is what neutronclient expects
             if service_key == 'network' and version == '2':
@@ -295,9 +347,12 @@ class CloudConfig(object):
                 if 'endpoint' not in constructor_kwargs:
                     endpoint = self.get_session_endpoint('identity')
                     constructor_kwargs['endpoint'] = endpoint
-            constructor_args.append(version)
+            if service_key == 'network':
+                constructor_kwargs['api_version'] = version
+            else:
+                constructor_kwargs['version'] = version
 
-        return client_class(*constructor_args, **constructor_kwargs)
+        return client_class(**constructor_kwargs)
 
     def _get_swift_client(self, client_class, **kwargs):
         session = self.get_session()

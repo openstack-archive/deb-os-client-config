@@ -29,7 +29,7 @@ Service specific settings, like the nova service type, are set with the
 default service type as a prefix. For instance, to set a special service_type
 for trove set
 
-::
+.. code-block:: bash
 
   export OS_DATABASE_SERVICE_TYPE=rax:database
 
@@ -56,7 +56,7 @@ Service specific settings, like the nova service type, are set with the
 default service type as a prefix. For instance, to set a special service_type
 for trove (because you're using Rackspace) set:
 
-::
+.. code-block:: yaml
 
   database_service_type: 'rax:database'
 
@@ -85,7 +85,7 @@ look in an OS specific config dir
 
 An example config file is probably helpful:
 
-::
+.. code-block:: yaml
 
   clouds:
     mordred:
@@ -117,7 +117,7 @@ An example config file is probably helpful:
       - IAD
 
 You may note a few things. First, since `auth_url` settings are silly
-and embarrasingly ugly, known cloud vendor profile information is included and
+and embarrassingly ugly, known cloud vendor profile information is included and
 may be referenced by name. One of the benefits of that is that `auth_url`
 isn't the only thing the vendor defaults contain. For instance, since
 Rackspace lists `rax:database` as the service type for trove, `os-client-config`
@@ -144,6 +144,34 @@ order to facilitate validation of values, all of the parameters that exist
 as a result of a chosen plugin need to go into the auth dict. For password
 auth, this includes `auth_url`, `username` and `password` as well as anything
 related to domains, projects and trusts.
+
+Splitting Secrets
+-----------------
+
+In some scenarios, such as configuration management controlled environments,
+it might be easier to have secrets in one file and non-secrets in another.
+This is fully supported via an optional file `secure.yaml` which follows all
+the same location rules as `clouds.yaml`. It can contain anything you put
+in `clouds.yaml` and will take precedence over anything in the `clouds.yaml`
+file.
+
+.. code-block:: yaml
+
+  # clouds.yaml
+  clouds:
+    internap:
+      profile: internap
+      auth:
+        username: api-55f9a00fb2619
+        project_name: inap-17037
+      regions:
+      - ams01
+      - nyj01
+  # secure.yaml
+  clouds:
+    internap:
+      auth:
+        password: XXXXXXXXXXXXXXXXX
 
 SSL Settings
 ------------
@@ -181,7 +209,7 @@ that the resource should never expire.
 and presents the cache information so that your various applications that
 are connecting to OpenStack can share a cache should you desire.
 
-::
+.. code-block:: yaml
 
   cache:
     class: dogpile.cache.pylibmc
@@ -214,7 +242,7 @@ caused it to not actually function. In that case, there is a config option
 you can set to unbreak you `force_ipv4`, or `OS_FORCE_IPV4` boolean
 environment variable.
 
-::
+.. code-block:: yaml
 
   client:
     force_ipv4: true
@@ -237,12 +265,44 @@ environment variable.
 The above snippet will tell client programs to prefer returning an IPv4
 address.
 
+Per-region settings
+-------------------
+
+Sometimes you have a cloud provider that has config that is common to the
+cloud, but also with some things you might want to express on a per-region
+basis. For instance, Internap provides a public and private network specific
+to the user in each region, and putting the values of those networks into
+config can make consuming programs more efficient.
+
+To support this, the region list can actually be a list of dicts, and any
+setting that can be set at the cloud level can be overridden for that
+region.
+
+::
+
+  clouds:
+    internap:
+      profile: internap
+      auth:
+        password: XXXXXXXXXXXXXXXXX
+        username: api-55f9a00fb2619
+        project_name: inap-17037
+      regions:
+      - name: ams01
+        values:
+          external_network: inap-17037-WAN1654
+          internal_network: inap-17037-LAN4820
+      - name: nyj01
+        values:
+          external_network: inap-17037-WAN7752
+          internal_network: inap-17037-LAN6745
+
 Usage
 -----
 
 The simplest and least useful thing you can do is:
 
-::
+.. code-block:: python
 
   python -m os_client_config.config
 
@@ -251,7 +311,7 @@ it from python, which is much more likely what you want to do, things like:
 
 Get a named cloud.
 
-::
+.. code-block:: python
 
   import os_client_config
 
@@ -261,10 +321,71 @@ Get a named cloud.
 
 Or, get all of the clouds.
 
-::
+.. code-block:: python
 
   import os_client_config
 
   cloud_config = os_client_config.OpenStackConfig().get_all_clouds()
   for cloud in cloud_config:
       print(cloud.name, cloud.region, cloud.config)
+
+argparse
+--------
+
+If you're using os-client-config from a program that wants to process
+command line options, there is a registration function to register the
+arguments that both os-client-config and keystoneauth know how to deal
+with - as well as a consumption argument.
+
+.. code-block:: python
+
+  import argparse
+  import sys
+
+  import os_client_config
+
+  cloud_config = os_client_config.OpenStackConfig()
+  parser = argparse.ArgumentParser()
+  cloud_config.register_argparse_arguments(parser, sys.argv)
+
+  options = parser.parse_args()
+
+  cloud = cloud_config.get_one_cloud(argparse=options)
+
+Constructing Legacy Client objects
+----------------------------------
+
+If all you want to do is get a Client object from a python-\*client library,
+and you want it to do all the normal things related to clouds.yaml, `OS_`
+environment variables, a helper function is provided. The following
+will get you a fully configured `novaclient` instance.
+
+.. code-block:: python
+
+  import argparse
+
+  import os_client_config
+
+  nova = os_client_config.make_client('compute')
+
+If you want to do the same thing but also support command line parsing.
+
+.. code-block:: python
+
+  import argparse
+
+  import os_client_config
+
+  nova = os_client_config.make_client(
+      'compute', options=argparse.ArgumentParser())
+
+If you want to get fancier than that in your python, then the rest of the
+API is available to you. But often times, you just want to do the one thing.
+
+Source
+------
+
+* Free software: Apache license
+* Documentation: http://docs.openstack.org/developer/os-client-config
+* Source: http://git.openstack.org/cgit/openstack/os-client-config
+* Bugs: http://bugs.launchpad.net/os-client-config

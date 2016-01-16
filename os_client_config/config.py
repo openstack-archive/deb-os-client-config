@@ -13,17 +13,21 @@
 # under the License.
 
 
+# alias because we already had an option named argparse
+import argparse as argparse_mod
+import collections
+import copy
 import json
 import os
+import sys
 import warnings
 
 import appdirs
-try:
-    from keystoneauth1 import loading
-except ImportError:
-    loading = None
+from keystoneauth1 import adapter
+from keystoneauth1 import loading
 import yaml
 
+from os_client_config import _log
 from os_client_config import cloud_config
 from os_client_config import defaults
 from os_client_config import exceptions
@@ -48,6 +52,11 @@ YAML_SUFFIXES = ('.yaml', '.yml')
 JSON_SUFFIXES = ('.json',)
 CONFIG_FILES = [
     os.path.join(d, 'clouds' + s)
+    for d in CONFIG_SEARCH_PATH
+    for s in YAML_SUFFIXES + JSON_SUFFIXES
+]
+SECURE_FILES = [
+    os.path.join(d, 'secure' + s)
     for d in CONFIG_SEARCH_PATH
     for s in YAML_SUFFIXES + JSON_SUFFIXES
 ]
@@ -102,8 +111,23 @@ def _get_os_environ(envvar_prefix=None):
     return ret
 
 
-def _auth_update(old_dict, new_dict):
+def _merge_clouds(old_dict, new_dict):
+    """Like dict.update, except handling nested dicts."""
+    ret = old_dict.copy()
+    for (k, v) in new_dict.items():
+        if isinstance(v, dict):
+            if k in ret:
+                ret[k] = _merge_clouds(ret[k], v)
+            else:
+                ret[k] = v.copy()
+        else:
+            ret[k] = v
+    return ret
+
+
+def _auth_update(old_dict, new_dict_source):
     """Like dict.update, except handling the nested dict called auth."""
+    new_dict = copy.deepcopy(new_dict_source)
     for (k, v) in new_dict.items():
         if k == 'auth':
             if k in old_dict:
@@ -115,17 +139,52 @@ def _auth_update(old_dict, new_dict):
     return old_dict
 
 
+def _fix_argv(argv):
+    # Transform any _ characters in arg names to - so that we don't
+    # have to throw billions of compat argparse arguments around all
+    # over the place.
+    processed = collections.defaultdict(list)
+    for index in range(0, len(argv)):
+        if argv[index].startswith('--'):
+            split_args = argv[index].split('=')
+            orig = split_args[0]
+            new = orig.replace('_', '-')
+            if orig != new:
+                split_args[0] = new
+                argv[index] = "=".join(split_args)
+            # Save both for later so we can throw an error about dupes
+            processed[new].append(orig)
+    overlap = []
+    for new, old in processed.items():
+        if len(old) > 1:
+            overlap.extend(old)
+    if overlap:
+        raise exceptions.OpenStackConfigException(
+            "The following options were given: '{options}' which contain"
+            " duplicates except that one has _ and one has -. There is"
+            " no sane way for us to know what you're doing. Remove the"
+            " duplicate option and try again".format(
+                options=','.join(overlap)))
+
+
 class OpenStackConfig(object):
 
     def __init__(self, config_files=None, vendor_files=None,
                  override_defaults=None, force_ipv4=None,
-                 envvar_prefix=None):
+                 envvar_prefix=None, secure_files=None):
+        self.log = _log.setup_logging(__name__)
+
         self._config_files = config_files or CONFIG_FILES
+        self._secure_files = secure_files or SECURE_FILES
         self._vendor_files = vendor_files or VENDOR_FILES
 
         config_file_override = os.environ.pop('OS_CLIENT_CONFIG_FILE', None)
         if config_file_override:
             self._config_files.insert(0, config_file_override)
+
+        secure_file_override = os.environ.pop('OS_CLIENT_SECURE_FILE', None)
+        if secure_file_override:
+            self._secure_files.insert(0, secure_file_override)
 
         self.defaults = defaults.get_defaults()
         if override_defaults:
@@ -133,6 +192,10 @@ class OpenStackConfig(object):
 
         # First, use a config file if it exists where expected
         self.config_filename, self.cloud_config = self._load_config_file()
+        _, secure_config = self._load_secure_file()
+        if secure_config:
+            self.cloud_config = _merge_clouds(
+                self.cloud_config, secure_config)
 
         if not self.cloud_config:
             self.cloud_config = {'clouds': {}}
@@ -180,6 +243,8 @@ class OpenStackConfig(object):
         envvars = _get_os_environ(envvar_prefix=envvar_prefix)
         if envvars:
             self.cloud_config['clouds'][self.envvar_key] = envvars
+            if not self.default_cloud:
+                self.default_cloud = self.envvar_key
 
         # Finally, fall through and make a cloud that starts with defaults
         # because we need somewhere to put arguments, and there are neither
@@ -187,6 +252,7 @@ class OpenStackConfig(object):
         if not self.cloud_config['clouds']:
             self.cloud_config = dict(
                 clouds=dict(defaults=dict(self.defaults)))
+            self.default_cloud = 'defaults'
 
         self._cache_expiration_time = 0
         self._cache_path = CACHE_PATH
@@ -217,8 +283,27 @@ class OpenStackConfig(object):
             self._cache_expiration = cache_settings.get(
                 'expiration', self._cache_expiration)
 
+        # Flag location to hold the peeked value of an argparse timeout value
+        self._argv_timeout = False
+
+    def get_extra_config(self, key, defaults=None):
+        """Fetch an arbitrary extra chunk of config, laying in defaults.
+
+        :param string key: name of the config section to fetch
+        :param dict defaults: (optional) default values to merge under the
+                                         found config
+        """
+        if not defaults:
+            defaults = {}
+        return _merge_clouds(
+            self._normalize_keys(defaults),
+            self._normalize_keys(self.cloud_config.get(key, {})))
+
     def _load_config_file(self):
         return self._load_yaml_json_file(self._config_files)
+
+    def _load_secure_file(self):
+        return self._load_yaml_json_file(self._secure_files)
 
     def _load_vendor_file(self):
         return self._load_yaml_json_file(self._vendor_files)
@@ -231,7 +316,7 @@ class OpenStackConfig(object):
                         return path, json.load(f)
                     else:
                         return path, yaml.safe_load(f)
-        return (None, None)
+        return (None, {})
 
     def _normalize_keys(self, config):
         new_config = {}
@@ -265,17 +350,36 @@ class OpenStackConfig(object):
         return self._cache_class
 
     def get_cache_arguments(self):
-        return self._cache_arguments.copy()
+        return copy.deepcopy(self._cache_arguments)
 
     def get_cache_expiration(self):
-        return self._cache_expiration.copy()
+        return copy.deepcopy(self._cache_expiration)
+
+    def _expand_region_name(self, region_name):
+        return {'name': region_name, 'values': {}}
+
+    def _expand_regions(self, regions):
+        ret = []
+        for region in regions:
+            if isinstance(region, dict):
+                ret.append(copy.deepcopy(region))
+            else:
+                ret.append(self._expand_region_name(region))
+        return ret
 
     def _get_regions(self, cloud):
         if cloud not in self.cloud_config['clouds']:
-            return ['']
+            return [self._expand_region_name('')]
+        regions = self._get_known_regions(cloud)
+        if not regions:
+            # We don't know of any regions use a workable default.
+            regions = [self._expand_region_name('')]
+        return regions
+
+    def _get_known_regions(self, cloud):
         config = self._normalize_keys(self.cloud_config['clouds'][cloud])
         if 'regions' in config:
-            return config['regions']
+            return self._expand_regions(config['regions'])
         elif 'region_name' in config:
             regions = config['region_name'].split(',')
             if len(regions) > 1:
@@ -283,22 +387,41 @@ class OpenStackConfig(object):
                     "Comma separated lists in region_name are deprecated."
                     " Please use a yaml list in the regions"
                     " parameter in {0} instead.".format(self.config_filename))
-            return regions
+            return self._expand_regions(regions)
         else:
             # crappit. we don't have a region defined.
             new_cloud = dict()
             our_cloud = self.cloud_config['clouds'].get(cloud, dict())
             self._expand_vendor_profile(cloud, new_cloud, our_cloud)
             if 'regions' in new_cloud and new_cloud['regions']:
-                return new_cloud['regions']
+                return self._expand_regions(new_cloud['regions'])
             elif 'region_name' in new_cloud and new_cloud['region_name']:
-                return [new_cloud['region_name']]
-            else:
-                # Wow. We really tried
-                return ['']
+                return [self._expand_region_name(new_cloud['region_name'])]
 
-    def _get_region(self, cloud=None):
-        return self._get_regions(cloud)[0]
+    def _get_region(self, cloud=None, region_name=''):
+        if region_name is None:
+            region_name = ''
+        if not cloud:
+            return self._expand_region_name(region_name)
+
+        regions = self._get_known_regions(cloud)
+        if not regions:
+            return self._expand_region_name(region_name)
+
+        if not region_name:
+            return regions[0]
+
+        for region in regions:
+            if region['name'] == region_name:
+                return region
+
+        raise exceptions.OpenStackConfigException(
+            'Region {region_name} is not a valid region name for cloud'
+            ' {cloud}. Valid choices are {region_list}. Please note that'
+            ' region names are case sensitive.'.format(
+                region_name=region_name,
+                region_list=','.join([r['name'] for r in regions]),
+                cloud=cloud))
 
     def get_cloud_names(self):
         return self.cloud_config['clouds'].keys()
@@ -325,7 +448,7 @@ class OpenStackConfig(object):
         if 'cloud' in cloud:
             del cloud['cloud']
 
-        return self._fix_backwards_madness(cloud)
+        return cloud
 
     def _expand_vendor_profile(self, name, cloud, our_cloud):
         # Expand a profile if it exists. 'cloud' is an old confusing name
@@ -386,6 +509,7 @@ class OpenStackConfig(object):
             'project_domain_id': ('project_domain_id', 'project-domain-id'),
             'project_domain_name': (
                 'project_domain_name', 'project-domain-name'),
+            'token': ('auth-token', 'auth_token', 'token'),
         }
         for target_key, possible_values in mappings.items():
             target = None
@@ -420,6 +544,104 @@ class OpenStackConfig(object):
             cloud['auth_type'] = 'password'
         return cloud
 
+    def register_argparse_arguments(self, parser, argv, service_keys=[]):
+        """Register all of the common argparse options needed.
+
+        Given an argparse parser, register the keystoneauth Session arguments,
+        the keystoneauth Auth Plugin Options and os-cloud. Also, peek in the
+        argv to see if all of the auth plugin options should be registered
+        or merely the ones already configured.
+        :param argparse.ArgumentParser: parser to attach argparse options to
+        :param list argv: the arguments provided to the application
+        :param string service_keys: Service or list of services this argparse
+                                    should be specialized for, if known.
+                                    The first item in the list will be used
+                                    as the default value for service_type
+                                    (optional)
+
+        :raises exceptions.OpenStackConfigException if an invalid auth-type
+                                                    is requested
+        """
+
+        # Fix argv in place - mapping any keys with embedded _ in them to -
+        _fix_argv(argv)
+
+        local_parser = argparse_mod.ArgumentParser(add_help=False)
+
+        for p in (parser, local_parser):
+            p.add_argument(
+                '--os-cloud',
+                metavar='<name>',
+                default=os.environ.get('OS_CLOUD', None),
+                help='Named cloud to connect to')
+
+        # we need to peek to see if timeout was actually passed, since
+        # the keystoneauth declaration of it has a default, which means
+        # we have no clue if the value we get is from the ksa default
+        # for from the user passing it explicitly. We'll stash it for later
+        local_parser.add_argument('--timeout', metavar='<timeout>')
+
+        # We need for get_one_cloud to be able to peek at whether a token
+        # was passed so that we can swap the default from password to
+        # token if it was. And we need to also peek for --os-auth-token
+        # for novaclient backwards compat
+        local_parser.add_argument('--os-token')
+        local_parser.add_argument('--os-auth-token')
+
+        # Peek into the future and see if we have an auth-type set in
+        # config AND a cloud set, so that we know which command line
+        # arguments to register and show to the user (the user may want
+        # to say something like:
+        #   openstack --os-cloud=foo --os-oidctoken=bar
+        # although I think that user is the cause of my personal pain
+        options, _args = local_parser.parse_known_args(argv)
+        if options.timeout:
+            self._argv_timeout = True
+
+        # validate = False because we're not _actually_ loading here
+        # we're only peeking, so it's the wrong time to assert that
+        # the rest of the arguments given are invalid for the plugin
+        # chosen (for instance, --help may be requested, so that the
+        # user can see what options he may want to give
+        cloud = self.get_one_cloud(argparse=options, validate=False)
+        default_auth_type = cloud.config['auth_type']
+
+        try:
+            loading.register_auth_argparse_arguments(
+                parser, argv, default=default_auth_type)
+        except Exception:
+            # Hidiing the keystoneauth exception because we're not actually
+            # loading the auth plugin at this point, so the error message
+            # from it doesn't actually make sense to os-client-config users
+            options, _args = parser.parse_known_args(argv)
+            plugin_names = loading.get_available_plugin_names()
+            raise exceptions.OpenStackConfigException(
+                "An invalid auth-type was specified: {auth_type}."
+                " Valid choices are: {plugin_names}.".format(
+                    auth_type=options.os_auth_type,
+                    plugin_names=",".join(plugin_names)))
+
+        if service_keys:
+            primary_service = service_keys[0]
+        else:
+            primary_service = None
+        loading.register_session_argparse_arguments(parser)
+        adapter.register_adapter_argparse_arguments(
+            parser, service_type=primary_service)
+        for service_key in service_keys:
+            # legacy clients have un-prefixed api-version options
+            parser.add_argument(
+                '--{service_key}-api-version'.format(
+                    service_key=service_key.replace('_', '-'),
+                    help=argparse_mod.SUPPRESS))
+            adapter.register_service_adapter_argparse_arguments(
+                parser, service_type=service_key)
+
+        # Backwards compat options for legacy clients
+        parser.add_argument('--http-timeout', help=argparse_mod.SUPPRESS)
+        parser.add_argument('--os-endpoint-type', help=argparse_mod.SUPPRESS)
+        parser.add_argument('--endpoint-type', help=argparse_mod.SUPPRESS)
+
     def _fix_backwards_interface(self, cloud):
         new_cloud = {}
         for key in cloud.keys():
@@ -430,13 +652,39 @@ class OpenStackConfig(object):
             new_cloud[target_key] = cloud[key]
         return new_cloud
 
+    def _fix_backwards_api_timeout(self, cloud):
+        new_cloud = {}
+        # requests can only have one timeout, which means that in a single
+        # cloud there is no point in different timeout values. However,
+        # for some reason many of the legacy clients decided to shove their
+        # service name in to the arg name for reasons surpassin sanity. If
+        # we find any values that are not api_timeout, overwrite api_timeout
+        # with the value
+        service_timeout = None
+        for key in cloud.keys():
+            if key.endswith('timeout') and not (
+                    key == 'timeout' or key == 'api_timeout'):
+                service_timeout = cloud[key]
+            else:
+                new_cloud[key] = cloud[key]
+        if service_timeout is not None:
+            new_cloud['api_timeout'] = service_timeout
+        # The common argparse arg from keystoneauth is called timeout, but
+        # os-client-config expects it to be called api_timeout
+        if self._argv_timeout:
+            if 'timeout' in new_cloud and new_cloud['timeout']:
+                new_cloud['api_timeout'] = new_cloud.pop('timeout')
+        return new_cloud
+
     def get_all_clouds(self):
 
         clouds = []
 
         for cloud in self.get_cloud_names():
             for region in self._get_regions(cloud):
-                clouds.append(self.get_one_cloud(cloud, region_name=region))
+                if region:
+                    clouds.append(self.get_one_cloud(
+                        cloud, region_name=region['name']))
         return clouds
 
     def _fix_args(self, args, argparse=None):
@@ -607,38 +855,49 @@ class OpenStackConfig(object):
             on missing required auth parameters
         """
 
-        if cloud is None and self.default_cloud:
-            cloud = self.default_cloud
-
-        if cloud is None and self.envvar_key in self.get_cloud_names():
-            cloud = self.envvar_key
-
         args = self._fix_args(kwargs, argparse=argparse)
 
-        if 'region_name' not in args or args['region_name'] is None:
-            args['region_name'] = self._get_region(cloud)
+        if cloud is None:
+            if 'cloud' in args:
+                cloud = args['cloud']
+            else:
+                cloud = self.default_cloud
 
         config = self._get_base_cloud_config(cloud)
 
+        # Get region specific settings
+        if 'region_name' not in args:
+            args['region_name'] = ''
+        region = self._get_region(cloud=cloud, region_name=args['region_name'])
+        args['region_name'] = region['name']
+        region_args = copy.deepcopy(region['values'])
+
         # Regions is a list that we can use to create a list of cloud/region
         # objects. It does not belong in the single-cloud dict
-        regions = config.pop('regions', None)
-        if regions and args['region_name'] not in regions:
-            raise exceptions.OpenStackConfigException(
-                'Region {region_name} is not a valid region name for cloud'
-                ' {cloud}. Valid choices are {region_list}. Please note that'
-                ' region names are case sensitive.'.format(
-                    region_name=args['region_name'],
-                    region_list=','.join(regions),
-                    cloud=cloud))
+        config.pop('regions', None)
 
         # Can't just do update, because None values take over
-        for (key, val) in iter(args.items()):
-            if val is not None:
-                if key == 'auth' and config[key] is not None:
-                    config[key] = _auth_update(config[key], val)
-                else:
-                    config[key] = val
+        for arg_list in region_args, args:
+            for (key, val) in iter(arg_list.items()):
+                if val is not None:
+                    if key == 'auth' and config[key] is not None:
+                        config[key] = _auth_update(config[key], val)
+                    else:
+                        config[key] = val
+
+        # Infer token plugin if a token was given
+        if (('auth' in config and 'token' in config['auth']) or
+                ('auth_token' in config and config['auth_token']) or
+                ('token' in config and config['token'])):
+            config.setdefault('token', config.pop('auth_token', None))
+
+        # These backwards compat values are only set via argparse. If it's
+        # there, it's because it was passed in explicitly, and should win
+        config = self._fix_backwards_api_timeout(config)
+        if 'endpoint_type' in config:
+            config['interface'] = config.pop('endpoint_type')
+
+        config = self._fix_backwards_madness(config)
 
         for key in BOOL_KEYS:
             if key in config:
@@ -657,27 +916,24 @@ class OpenStackConfig(object):
         #                compatible behaviour
         config = self.auth_config_hook(config)
 
-        if loading:
-            if validate:
-                try:
-                    loader = self._get_auth_loader(config)
-                    config = self._validate_auth(config, loader)
-                    auth_plugin = loader.load_from_options(**config['auth'])
-                except Exception as e:
-                    # We WANT the ksa exception normally
-                    # but OSC can't handle it right now, so we try deferring
-                    # to ksc. If that ALSO fails, it means there is likely
-                    # a deeper issue, so we assume the ksa error was correct
-                    auth_plugin = None
-                    try:
-                        config = self._validate_auth_ksc(config)
-                    except Exception:
-                        raise e
-            else:
+        if validate:
+            try:
+                loader = self._get_auth_loader(config)
+                config = self._validate_auth(config, loader)
+                auth_plugin = loader.load_from_options(**config['auth'])
+            except Exception as e:
+                # We WANT the ksa exception normally
+                # but OSC can't handle it right now, so we try deferring
+                # to ksc. If that ALSO fails, it means there is likely
+                # a deeper issue, so we assume the ksa error was correct
+                self.log.debug("Deferring keystone exception: {e}".format(e=e))
                 auth_plugin = None
+                try:
+                    config = self._validate_auth_ksc(config)
+                except Exception:
+                    raise e
         else:
             auth_plugin = None
-            config = self._validate_auth_ksc(config)
 
         # If any of the defaults reference other values, we need to expand
         for (key, value) in config.items():
@@ -735,4 +991,15 @@ class OpenStackConfig(object):
 if __name__ == '__main__':
     config = OpenStackConfig().get_all_clouds()
     for cloud in config:
-        print(cloud.name, cloud.region, cloud.config)
+        print_cloud = False
+        if len(sys.argv) == 1:
+            print_cloud = True
+        elif len(sys.argv) == 3 and (
+                sys.argv[1] == cloud.name and sys.argv[2] == cloud.region):
+            print_cloud = True
+        elif len(sys.argv) == 2 and (
+                sys.argv[1] == cloud.name):
+            print_cloud = True
+
+        if print_cloud:
+            print(cloud.name, cloud.region, cloud.config)

@@ -16,6 +16,7 @@ These are the default behaviors unless a cloud is configured differently.
 * Identity uses `password` authentication
 * Identity API Version is 2
 * Image API Version is 2
+* Volume API Version is 2
 * Images must be in `qcow2` format
 * Images are uploaded using PUT interface
 * Public IPv4 is directly routable via DHCP from Neutron
@@ -51,6 +52,7 @@ nz_wlg_2       Wellington, NZ
 
 * Image API Version is 1
 * Images must be in `raw` format
+* Volume API Version is 1
 
 citycloud
 ---------
@@ -67,11 +69,12 @@ Kna1           Karlskrona, SE
 
 * Identity API Version is 3
 * Public IPv4 is provided via NAT with Neutron Floating IP
+* Volume API Version is 1
 
 conoha
 ------
 
-https://identity.%(region_name)s.conoha.io/v2.0
+https://identity.%(region_name)s.conoha.io
 
 ============== ================
 Region Name    Human Name
@@ -86,7 +89,7 @@ sjc1           San Jose, CA
 datacentred
 -----------
 
-https://compute.datacentred.io:5000/v2.0
+https://compute.datacentred.io:5000
 
 ============== ================
 Region Name    Human Name
@@ -137,6 +140,8 @@ it-mil1        Milan, IT
 de-fra1        Frankfurt, DE
 ============== ================
 
+* Volume API Version is 1
+
 hp
 --
 
@@ -151,6 +156,20 @@ region-b.geo-1 US East
 
 * DNS Service Type is `hpext:dns`
 * Image API Version is 1
+* Public IPv4 is provided via NAT with Neutron Floating IP
+* Volume API Version is 1
+
+ibmcloud
+--------
+
+https://identity.open.softlayer.com
+
+============== ================
+Region Name    Human Name
+============== ================
+london         London, UK
+============== ================
+
 * Public IPv4 is provided via NAT with Neutron Floating IP
 
 internap
@@ -212,6 +231,7 @@ SYD            Sydney
 * Uploaded Images need properties to not use vendor agent::
   :vm_mode: hvm
   :xenapi_use_agent: False
+* Volume API Version is 1
 
 runabove
 --------
@@ -241,6 +261,7 @@ ZH             Zurich, CH
 
 * Images must be in `raw` format
 * Images must be uploaded using the Glance Task Interface
+* Volume API Version is 1
 
 ultimum
 -------
@@ -252,6 +273,8 @@ Region Name    Human Name
 ============== ================
 RegionOne      Region One
 ============== ================
+
+* Volume API Version is 1
 
 unitedstack
 -----------
@@ -267,14 +290,18 @@ gd1            Guangdong
 
 * Identity API Version is 3
 * Images must be in `raw` format
+* Volume API Version is 1
 
 vexxhost
 --------
 
-http://auth.api.thenebulacloud.com:5000/v2.0/
+http://auth.vexxhost.net
 
 ============== ================
 Region Name    Human Name
 ============== ================
 ca-ymq-1       Montreal
 ============== ================
+
+* DNS API Version is 1
+* Identity API Version is 3
