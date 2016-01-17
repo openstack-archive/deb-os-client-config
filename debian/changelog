@@ -4,6 +4,7 @@ python-os-client-config (1.14.0-1) experimental; urgency=medium
   * Fixed (build-)depends for this release.
   * Added patch to stop using reno.
   * Fixed debian/copyright ordering.
+  * Also running Py3 tests.
 
  -- Thomas Goirand <zigo@debian.org>  Sat, 16 Jan 2016 06:14:32 +0000
 
