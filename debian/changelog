@@ -1,9 +1,13 @@
-python-os-client-config (1.14.0-3) UNRELEASED; urgency=medium
+python-os-client-config (1.16.0-1) unstable; urgency=medium
 
+  [ Corey Bryant ]
   * d/control: Drop dependency on python-reno as it's not needed for package
     builds.
 
- -- Corey Bryant <corey.bryant@canonical.com>  Mon, 22 Feb 2016 16:23:08 -0500
+  [ Thomas Goirand ]
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 04 Apr 2016 13:35:19 +0200
 
 python-os-client-config (1.14.0-2) unstable; urgency=medium
 
