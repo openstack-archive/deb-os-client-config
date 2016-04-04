@@ -6,6 +6,7 @@ python-os-client-config (1.16.0-1) unstable; urgency=medium
 
   [ Thomas Goirand ]
   * New upstream release.
+  * Fixed short description typo.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 04 Apr 2016 13:35:19 +0200
 
